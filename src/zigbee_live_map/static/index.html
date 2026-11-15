@@ -498,24 +498,30 @@ function draw(ts) {
   const dim = a => sel && !near.has(a) ? .3 : 1;
   const now = performance.now(), weak = [];
   ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.font = "13px ui-monospace, 'SF Mono', Menlo, monospace";
-  const troubled = (a, b) => { const p = S.pairs.get(pairKey(a, b)), q = quality(p); return q === "poor" || q === "fair" ? p : null; };
+  // Colour and label a link by the mesh's own cost when the key gives it (4+ of 7 is trouble), else the retry rate.
+  const linkHealth = (a, b) => {
+    const cost = costBetween(a, b);
+    if (cost != null) return { bad: cost >= 4, label: `${cost}/7` };
+    const p = S.pairs.get(pairKey(a, b)), q = quality(p);
+    return { bad: q === "poor" || q === "fair", label: `${Math.round(retryRate(p) * 100)} %` };
+  };
 
   ctx.lineWidth = 1.2;                                                       // parent links
   for (const n of ns) if (n.parent && P.has(n.parent)) {
-    const [x1, y1] = P.get(n.addr), [x2, y2] = P.get(n.parent), vis = sel && n.addr !== sel && n.parent !== sel ? .3 : 1, bad = troubled(n.addr, n.parent);
+    const [x1, y1] = P.get(n.addr), [x2, y2] = P.get(n.parent), vis = sel && n.addr !== sel && n.parent !== sel ? .3 : 1, h = linkHealth(n.addr, n.parent), bad = h.bad;
     ctx.setLineDash([3, 6]); ctx.lineWidth = bad ? 2 : 1.2;
     ctx.strokeStyle = bad ? rgba(pal.warn, .95 * vis) : rgba(pal.node.zed, (pal.dark ? .5 : .75) * vis);
     ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-    if (bad && !S.links.has(pairKey(n.addr, n.parent))) weak.push([(x1 + x2) / 2, (y1 + y2) / 2, bad, vis]);
+    if (bad && !S.links.has(pairKey(n.addr, n.parent))) weak.push([(x1 + x2) / 2, (y1 + y2) / 2, h.label, vis]);
   }
   ctx.setLineDash([]);
   for (const l of S.links.values()) {                                        // hop links
     const a = P.get(l.a), b = P.get(l.b); if (!a || !b) continue;
-    const vis = sel && l.a !== sel && l.b !== sel ? .3 : 1, bad = troubled(l.a, l.b);
+    const vis = sel && l.a !== sel && l.b !== sel ? .3 : 1, h = linkHealth(l.a, l.b), bad = h.bad;
     ctx.lineWidth = 1 + Math.min(3.5, Math.log2(l.count + 1) * .45) + l.heat * 1.5 + (bad ? 1 : 0);
     ctx.strokeStyle = bad ? rgba(pal.warn, (.6 + l.heat * .4) * vis) : rgba(pal.accent, ((pal.dark ? .16 : .35) + l.heat * .55) * vis);
     ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
-    if (bad) weak.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, bad, vis]);
+    if (bad) weak.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, h.label, vis]);
     l.heat *= .965;
   }
   for (let i = rings.length - 1; i >= 0; i--) {                              // broadcasts
@@ -540,7 +546,7 @@ function draw(ts) {
       ctx.beginPath(); ctx.arc(x, y, size * (.45 + .55 * f), 0, 6.283); ctx.fill();
     }
   }
-  for (const [x, y, p, vis] of weak) { ctx.globalAlpha = vis; tag(`${Math.round(retryRate(p) * 100)} %`, x, y, pal.warn, pal.warn); }   // poor links say so in text
+  for (const [x, y, lbl, vis] of weak) { ctx.globalAlpha = vis; tag(lbl, x, y, pal.warn, pal.warn); }   // poor links say so in text (cost X/7 with the key, else retry %)
   ctx.globalAlpha = 1;
   for (const n of ns) {                                                      // nodes and labels
     const [x, y] = P.get(n.addr), r = radius(n), c = colorOf(n), rl = role(n);
