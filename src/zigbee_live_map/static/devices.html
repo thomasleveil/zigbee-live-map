@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zigbee live map</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/common.css">
+<script src="/static/common.js"></script>
+<style>
+main { max-width: 1280px; margin: 0 auto; padding: 1.2rem 1rem 3rem; }
+main > p { max-width: 60rem; }
+.layout { display: grid; grid-template-columns: 19rem minmax(0, 1fr); gap: 1.2rem; margin-top: 1rem; align-items: start; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1rem; }
+.panel h2 { font-size: 1.15rem; margin-bottom: .7rem; }
+.panel + .panel { margin-top: 1.2rem; }
+#lists { list-style: none; margin: 0 0 .9rem; padding: 0; display: grid; gap: .4rem; }
+#lists button { width: 100%; text-align: left; display: flex; justify-content: space-between; gap: .6rem; align-items: baseline; }
+#lists button[aria-current="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, var(--panel)); }
+#lists .off { color: var(--muted); text-decoration: line-through; }
+form.inline, .toolbar { display: flex; flex-wrap: wrap; gap: .5rem .8rem; align-items: end; }
+form.inline label, .toolbar label.field { display: grid; gap: .15rem; font-size: .9rem; color: var(--muted); flex: 1; min-width: 9rem; }
+.toolbar { margin-bottom: .9rem; align-items: center; }
+.toolbar label.opt { display: inline-flex; align-items: center; gap: .4rem; cursor: pointer; }
+.toolbar .grow { flex: 1; }
+.danger { border-color: var(--bad); color: var(--bad); }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .95rem; }
+th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); vertical-align: middle; }
+th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+td input { width: 100%; min-width: 5.5rem; }
+td.mono { font-family: ui-monospace, Menlo, monospace; font-size: .85rem; white-space: nowrap; }
+td.actions { white-space: nowrap; }
+td.actions button { margin-right: .3rem; padding: .2rem .5rem; }
+#flash { min-height: 1.5rem; margin: .6rem 0 0; }
+#flash.err { color: var(--bad); }
+input[type="file"] { max-width: 100%; }
+@media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header class="hud">
+  <h1 class="brand">Zigbee <i>//</i> <span data-i18n="dev.title"></span></h1>
+  <span class="grow"></span>
+  <a class="btn" href="/" data-i18n="nav.map"></a>
+  <button type="button" id="btnSettings" data-i18n="nav.settings"></button>
+</header>
+<main>
+  <p data-i18n="dev.intro"></p>
+  <p class="note" id="memory" data-i18n="dev.memory" hidden></p>
+  <p id="flash" role="status"></p>
+  <div class="layout">
+    <nav class="panel" data-i18n-aria="dev.listsAria">
+      <h2 data-i18n="dev.lists"></h2>
+      <ul id="lists"></ul>
+      <p class="note" id="noLists" data-i18n="dev.noLists" hidden></p>
+      <form class="inline" id="newList">
+        <label for="newListName"><span data-i18n="dev.newListName"></span><input id="newListName" type="text" maxlength="60" autocomplete="off" required></label>
+        <button type="submit" data-i18n="dev.create"></button>
+      </form>
+    </nav>
+    <div>
+      <section class="panel" id="listPanel" hidden aria-labelledby="listTitle">
+        <h2 id="listTitle"></h2>
+        <div class="toolbar">
+          <label class="field" for="listName"><span data-i18n="dev.listName"></span><input id="listName" type="text" maxlength="60" autocomplete="off"></label>
+          <button type="button" id="renameList" data-i18n="dev.renameList"></button>
+          <label class="opt"><input type="checkbox" id="listEnabled"><span data-i18n="dev.enabled"></span></label>
+          <span class="grow"></span>
+          <button type="button" class="danger" id="deleteList" data-i18n="dev.deleteList"></button>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th scope="col" data-i18n="dev.col.name"></th><th scope="col" data-i18n="dev.col.model"></th><th scope="col" data-i18n="dev.col.ieee"></th>
+              <th scope="col" data-i18n="dev.col.nwk"></th><th scope="col" data-i18n="dev.col.vendor"></th><th scope="col" data-i18n="dev.col.actions"></th></tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+        <p class="note" id="empty" data-i18n="dev.empty" hidden></p>
+        <h3 style="margin-top:1.1rem;font-size:1.05rem" data-i18n="dev.add"></h3>
+        <form class="inline" id="addDevice" style="margin-top:.5rem">
+          <label for="addIeee"><span data-i18n="dev.col.ieee"></span><input id="addIeee" type="text" autocomplete="off" required placeholder="00:11:22:33:44:55:66:77"></label>
+          <label for="addName"><span data-i18n="dev.col.name"></span><input id="addName" type="text" maxlength="60" autocomplete="off" required></label>
+          <label for="addModel"><span data-i18n="dev.col.model"></span><input id="addModel" type="text" maxlength="60" autocomplete="off"></label>
+          <button type="submit" data-i18n="dev.addButton"></button>
+        </form>
+        <h3 style="margin-top:1.1rem;font-size:1.05rem" data-i18n="dev.import"></h3>
+        <div class="toolbar" style="margin-top:.5rem">
+          <label class="field" for="importFile"><span data-i18n="dev.importHelp"></span><input id="importFile" type="file" accept=".csv,.tsv,.txt,.json,text/csv,application/json"></label>
+          <a class="btn" id="exportJson" data-i18n="dev.exportJson"></a>
+          <a class="btn" id="exportCsv" data-i18n="dev.exportCsv"></a>
+        </div>
+      </section>
+      <section class="panel" id="heardPanel" hidden aria-labelledby="heardTitle">
+        <h2 id="heardTitle" data-i18n="dev.heard"></h2>
+        <p class="note" data-i18n="dev.heardHelp"></p>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th scope="col" data-i18n="dev.col.ieee"></th><th scope="col" data-i18n="dev.col.nwk"></th><th scope="col" data-i18n="dev.col.vendor"></th><th scope="col" data-i18n="dev.col.name"></th><th scope="col" data-i18n="dev.col.actions"></th></tr></thead>
+            <tbody id="heardRows"></tbody>
+          </table>
+        </div>
+        <p class="note" id="heardNone" data-i18n="dev.heardNone" hidden></p>
+      </section>
+    </div>
+  </div>
+</main>
+<script>
+"use strict";
+const { t, esc, getJson } = ZLM;
+const $ = id => document.getElementById(id);
+let data = { lists: [], heard: [], vendors: {}, persistent: true }, current = null;
+
+function flash(text, isError) { const f = $("flash"); f.textContent = text; f.classList.toggle("err", !!isError); }
+async function call(method, url, body, done) {
+  try {
+    const options = { method };
+    if (body !== undefined) { options.body = typeof body === "string" ? body : JSON.stringify(body); options.headers = { "Content-Type": typeof body === "string" ? "text/plain" : "application/json" }; }
+    const result = await getJson(url, options);
+    await load(); flash(done ? done(result) : t("dev.saved"));
+    return result;
+  } catch (err) { flash(t("dev.error", { error: err.message }), true); return null; }
+}
+async function load() {
+  data = await getJson("/api/lists");
+  if (!data.lists.some(l => l.id === current)) current = data.lists.length ? data.lists[0].id : null;
+  render();
+}
+const currentList = () => data.lists.find(l => l.id === current) || null;
+const vendor = ieee => data.vendors[ieee] || t("dev.unknownVendor");
+
+function render() {
+  document.title = `Zigbee, ${t("dev.title")}`;
+  $("memory").hidden = data.persistent; $("noLists").hidden = data.lists.length > 0;
+  const lists = $("lists"); lists.innerHTML = "";
+  for (const l of data.lists) {
+    const li = document.createElement("li"), b = document.createElement("button"); b.type = "button";
+    b.innerHTML = `<span class="${l.enabled ? "" : "off"}">${esc(l.name)}</span><span class="note">${esc(t("dev.count", { n: Object.keys(l.devices).length }))}</span>`;
+    b.setAttribute("aria-current", String(l.id === current));
+    b.addEventListener("click", () => { current = l.id; render(); });
+    li.appendChild(b); lists.appendChild(li);
+  }
+  const list = currentList(); $("listPanel").hidden = !list;
+  if (list) {
+    $("listTitle").textContent = list.name; $("listName").value = list.name; $("listEnabled").checked = list.enabled;
+    $("exportJson").href = `/api/lists/${encodeURIComponent(list.id)}/export?format=json`; $("exportCsv").href = `/api/lists/${encodeURIComponent(list.id)}/export?format=csv`;
+    const rows = $("rows"); rows.innerHTML = "";
+    const entries = Object.entries(list.devices).sort((a, b) => (a[1].name || "").localeCompare(b[1].name || ""));
+    $("empty").hidden = entries.length > 0;
+    for (const [ieee, d] of entries) {
+      const tr = document.createElement("tr"), aria = esc(t("dev.rowAria", { ieee }));
+      tr.innerHTML = `<td><input type="text" maxlength="60" value="${esc(d.name || "")}" aria-label="${esc(t("dev.col.name"))}, ${aria}"></td>
+        <td><input type="text" maxlength="60" value="${esc(d.model || "")}" aria-label="${esc(t("dev.col.model"))}, ${aria}"></td>
+        <td class="mono">${esc(ieee)}</td>
+        <td><input type="text" maxlength="6" value="${esc(d.nwk || "")}" aria-label="${esc(t("dev.col.nwk"))}, ${aria}" style="min-width:4.5rem"></td>
+        <td>${esc(vendor(ieee))}</td>
+        <td class="actions"><button type="button" class="save">${esc(t("dev.save"))}</button><button type="button" class="remove">${esc(t("dev.remove"))}</button></td>`;
+      const [name, model, nwk] = tr.querySelectorAll("input");
+      const save = () => call("PUT", `/api/lists/${encodeURIComponent(list.id)}/devices/${encodeURIComponent(ieee)}`, { name: name.value, model: model.value, nwk: nwk.value });
+      tr.querySelector(".save").addEventListener("click", save);
+      for (const input of [name, model, nwk]) input.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); save(); } });
+      tr.querySelector(".remove").addEventListener("click", () => call("DELETE", `/api/lists/${encodeURIComponent(list.id)}/devices/${encodeURIComponent(ieee)}`, undefined, () => t("dev.removed")));
+      rows.appendChild(tr);
+    }
+  }
+  $("heardPanel").hidden = !list; $("heardNone").hidden = data.heard.length > 0;
+  const heard = $("heardRows"); heard.innerHTML = "";
+  for (const h of list ? data.heard : []) {
+    const tr = document.createElement("tr"), id = "name-" + h.ieee.replaceAll(":", "");
+    tr.innerHTML = `<td class="mono">${esc(h.ieee)}</td><td class="mono">${esc(h.nwk)}</td><td>${esc(vendor(h.ieee))}</td>
+      <td><input type="text" id="${id}" maxlength="60" aria-label="${esc(t("dev.nameIt", { ieee: h.ieee }))}"></td>
+      <td class="actions"><button type="button">${esc(t("dev.addButton"))}</button></td>`;
+    const input = tr.querySelector("input");
+    const add = () => { if (input.value.trim()) call("PUT", `/api/lists/${encodeURIComponent(list.id)}/devices/${encodeURIComponent(h.ieee)}`, { name: input.value, nwk: h.nwk }); };
+    tr.querySelector("button").addEventListener("click", add);
+    input.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); add(); } });
+    heard.appendChild(tr);
+  }
+}
+
+$("newList").addEventListener("submit", async ev => {
+  ev.preventDefault(); const name = $("newListName").value;
+  const made = await call("POST", "/api/lists", { name });
+  if (made) { current = made.id; $("newListName").value = ""; render(); }
+});
+$("renameList").addEventListener("click", () => call("PATCH", `/api/lists/${encodeURIComponent(current)}`, { name: $("listName").value }));
+$("listName").addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); $("renameList").click(); } });
+$("listEnabled").addEventListener("change", () => call("PATCH", `/api/lists/${encodeURIComponent(current)}`, { enabled: $("listEnabled").checked }));
+$("deleteList").addEventListener("click", () => {
+  const list = currentList();
+  if (list && confirm(t("dev.deleteListConfirm", { name: list.name, n: Object.keys(list.devices).length }))) call("DELETE", `/api/lists/${encodeURIComponent(list.id)}`, undefined, () => t("dev.removed"));
+});
+$("addDevice").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const ok = await call("PUT", `/api/lists/${encodeURIComponent(current)}/devices/${encodeURIComponent($("addIeee").value.trim())}`, { name: $("addName").value, model: $("addModel").value });
+  if (ok) ev.target.reset();
+});
+$("importFile").addEventListener("change", async ev => {
+  const file = ev.target.files[0]; if (!file) return;
+  await call("POST", `/api/lists/${encodeURIComponent(current)}/import`, await file.text(), r => t("dev.imported", { n: r.imported }));
+  ev.target.value = "";
+});
+$("btnSettings").addEventListener("click", () => ZLM.openSettings());
+document.addEventListener("zlm:lang", render);
+(async () => { await ZLM.init(); try { await load(); } catch (err) { flash(t("dev.error", { error: err.message }), true); } })();
+</script>
+</body>
+</html>

@@ -1,5 +1,5 @@
-# Your own network: device names and captures never belong in the repository.
-names.json
+# Your own network never belongs in the repository: captures hold your devices' addresses.
+# (Device lists live in your home directory, see --data-dir.)
 *.pcap
 *.pcapng
 

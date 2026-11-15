@@ -1,13 +1,15 @@
-"""Local web server: frames in, events out over a WebSocket, one page to draw them.
+"""Local web server: frames in, events out over a WebSocket, pages to draw and manage them.
 
-It listens on 127.0.0.1 only and refuses WebSocket connections whose Origin is another site,
-so a web page you visit cannot read your radio traffic through your browser.
+It listens on 127.0.0.1 only. Every request must be addressed to that local host name, and every
+request that changes something must come from the page itself (same Origin), so a web site you
+visit cannot read your radio traffic or edit your device lists through your browser.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import re
 import threading
 import time
 from collections import deque
@@ -16,24 +18,52 @@ from pathlib import Path
 
 from aiohttp import WSMsgType, web
 
-from . import __version__, demo, names as names_store
+from . import __version__, demo
+from .devices import DeviceError, DeviceStore
 from .frames import Classifier, read_pcap
+from .vendors import Registry, VendorError
+
+STATIC_TYPES = {".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".json": "application/json"}
+STATIC_NAME = re.compile(r"^[a-z0-9_-]+\.(css|js)$")
+LOCALE_CODE = re.compile(r"^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})?$")
+PAGES = {"/": "index.html", "/devices": "devices.html"}
+
+
+def _static(name: str) -> str:
+    return resources.files("zigbee_live_map").joinpath("static", name).read_text(encoding="utf-8")
+
+
+def list_locales() -> list[dict]:
+    found = []
+    for entry in resources.files("zigbee_live_map").joinpath("static", "locales").iterdir():
+        code = entry.name.removesuffix(".json")
+        if entry.name.endswith(".json") and LOCALE_CODE.match(code):
+            try:
+                found.append({"code": code, "name": json.loads(entry.read_text(encoding="utf-8")).get("_name", code)})
+            except ValueError:
+                continue
+    return sorted(found, key=lambda item: item["code"])
 
 
 class Hub:
     """Keeps the recent events and fans every new one out to the connected pages."""
 
-    def __init__(self, names_path: Path | None, names: dict, info: dict, backlog: int) -> None:
-        self.names_path, self.names, self.info = names_path, names, info
+    def __init__(self, store: DeviceStore, registry: Registry, info: dict, backlog: int) -> None:
+        self.store, self.registry, self.info = store, registry, info
         self.status = {"type": "status", "sniffer": "starting", "detail": ""}
         self.events: deque = deque(maxlen=backlog)
         self.clients: set[web.WebSocketResponse] = set()
         self.classifier = Classifier()
+        self.heard: dict[str, str] = {}  # IEEE -> short address, as heard on the air
         self.generation = 0  # bumped on every channel change, so frames from the old channel are dropped
         self.source: LiveSource | None = None
 
+    def vendors(self) -> dict[str, str]:
+        known = set(self.store.merged()) | set(self.heard)
+        return {ieee: org for ieee in known if (org := self.registry.lookup(ieee))}
+
     def hello(self) -> dict:
-        return {"type": "hello", "version": __version__, **self.info, "names": self.names}
+        return {"type": "hello", "version": __version__, **self.info, "names": self.store.merged(), "vendors": self.vendors()}
 
     async def send_all(self, message: dict) -> None:
         text = json.dumps(message, separators=(",", ":"))
@@ -46,27 +76,20 @@ class Hub:
     async def publish(self, frame: bytes, ts: float, rssi: int | None) -> None:
         event = self.classifier.event(frame, ts, rssi)
         self.events.append(event)
+        ieee, short = event.get("ieee"), event.get("ms")
+        if ieee and short and self.heard.get(ieee) != short:
+            self.heard[ieee] = short
+            org = self.registry.lookup(ieee)
+            if org:
+                await self.send_all({"type": "vendors", "vendors": {ieee: org}})
         await self.send_all({"type": "ev", "e": event})
 
     async def set_status(self, sniffer: str, detail: str = "") -> None:
         self.status = {"type": "status", "sniffer": sniffer, "detail": detail}
         await self.send_all(self.status)
 
-    async def rename(self, ieee: str, name: str) -> None:
-        ieee = ieee.lower()
-        if not names_store.IEEE_RE.match(ieee):
-            return
-        name = name.strip()[:60]
-        entry = dict(self.names.get(ieee, {}))
-        if name:
-            entry["name"] = name
-            self.names[ieee] = entry
-        elif ieee in self.names:
-            entry.pop("name", None)
-            self.names[ieee] = entry
-        if self.names_path:
-            names_store.save(self.names_path, self.names)
-        await self.send_all({"type": "names", "names": self.names})
+    async def names_changed(self) -> None:
+        await self.send_all({"type": "names", "names": self.store.merged(), "vendors": self.vendors()})
 
     async def tune(self, channel: int) -> None:
         if self.source is None or channel not in range(11, 27) or channel == self.info["channel"]:
@@ -74,6 +97,7 @@ class Hub:
         self.generation += 1
         self.info["channel"] = channel
         self.events.clear()
+        self.heard.clear()
         self.classifier = Classifier()
         self.source.set_channel(channel, self.generation)
         await self.send_all(self.hello())
@@ -172,24 +196,135 @@ async def pump(queue: asyncio.Queue, hub: Hub) -> None:
             await hub.publish(frame, ts, rssi)
 
 
-def _local_only(request: web.Request) -> bool:
-    port = request.app["port"]
-    allowed = {f"127.0.0.1:{port}", f"localhost:{port}"}
+# ------------------------------------------------------------------------------------------ HTTP
+
+HUB = web.AppKey("hub", Hub)
+
+@web.middleware
+async def local_only(request: web.Request, handler):
+    port = request.transport.get_extra_info("sockname")[1]  # the port we really listen on
+    hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
     origin = request.headers.get("Origin")
-    return request.host in allowed and (origin is None or origin in {f"http://{h}" for h in allowed})
-
-
-async def handle_index(request: web.Request) -> web.StreamResponse:
-    if not _local_only(request):
+    changes = request.method not in ("GET", "HEAD") or request.path == "/ws"
+    if request.host not in hosts or (origin is not None and origin not in {f"http://{h}" for h in hosts}) or (changes and origin is None):
         raise web.HTTPForbidden()
-    page = resources.files("zigbee_live_map").joinpath("static/index.html").read_text(encoding="utf-8")
-    return web.Response(text=page, content_type="text/html", headers={"Cache-Control": "no-store"})
+    try:
+        return await handler(request)
+    except (DeviceError, VendorError) as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+
+
+def _text(body: str, kind: str) -> web.Response:
+    return web.Response(text=body, content_type=STATIC_TYPES[kind], charset="utf-8", headers={"Cache-Control": "no-store"})
+
+
+async def handle_page(request: web.Request) -> web.Response:
+    return _text(_static(PAGES[request.path]), ".html")
+
+
+async def handle_static(request: web.Request) -> web.Response:
+    name = request.match_info["name"]
+    if not STATIC_NAME.match(name):
+        raise web.HTTPNotFound()
+    try:
+        return _text(_static(name), "." + name.rsplit(".", 1)[1])
+    except (FileNotFoundError, OSError):
+        raise web.HTTPNotFound() from None
+
+
+async def handle_locales(_request: web.Request) -> web.Response:
+    return web.json_response(list_locales(), headers={"Cache-Control": "no-store"})
+
+
+async def handle_locale(request: web.Request) -> web.Response:
+    code = request.match_info["code"]
+    if not LOCALE_CODE.match(code):
+        raise web.HTTPNotFound()
+    try:
+        return _text(_static(f"locales/{code}.json"), ".json")
+    except (FileNotFoundError, OSError):
+        raise web.HTTPNotFound() from None
+
+
+async def _json(request: web.Request) -> dict:
+    try:
+        data = await request.json()
+    except ValueError:
+        raise DeviceError("the request body is not JSON") from None
+    if not isinstance(data, dict):
+        raise DeviceError("the request body must be a JSON object")
+    return data
+
+
+async def api_lists(request: web.Request) -> web.Response:
+    hub: Hub = request.app[HUB]
+    named = set(hub.store.merged())
+    heard = [{"ieee": ieee, "nwk": short} for ieee, short in sorted(hub.heard.items()) if ieee not in named]
+    return web.json_response({"lists": hub.store.describe(), "heard": heard, "vendors": hub.vendors(), "persistent": hub.store.dir is not None})
+
+
+async def api_list_create(request: web.Request) -> web.Response:
+    hub: Hub = request.app[HUB]
+    list_id = hub.store.create((await _json(request)).get("name", ""))
+    await hub.names_changed()
+    return web.json_response({"id": list_id})
+
+
+async def api_list_update(request: web.Request) -> web.Response:
+    hub: Hub = request.app[HUB]
+    data = await _json(request)
+    hub.store.update(request.match_info["list"], name=data.get("name"), enabled=data.get("enabled"))
+    await hub.names_changed()
+    return web.json_response({})
+
+
+async def api_list_delete(request: web.Request) -> web.Response:
+    hub: Hub = request.app[HUB]
+    hub.store.delete(request.match_info["list"])
+    await hub.names_changed()
+    return web.json_response({})
+
+
+async def api_device_set(request: web.Request) -> web.Response:
+    hub: Hub = request.app[HUB]
+    hub.store.set_device(request.match_info["list"], request.match_info["ieee"], await _json(request))
+    await hub.names_changed()
+    return web.json_response({})
+
+
+async def api_device_delete(request: web.Request) -> web.Response:
+    hub: Hub = request.app[HUB]
+    hub.store.delete_device(request.match_info["list"], request.match_info["ieee"])
+    await hub.names_changed()
+    return web.json_response({})
+
+
+async def api_import(request: web.Request) -> web.Response:
+    hub: Hub = request.app[HUB]
+    count = hub.store.import_text(request.match_info["list"], await request.text())
+    await hub.names_changed()
+    return web.json_response({"imported": count})
+
+
+async def api_export(request: web.Request) -> web.Response:
+    hub: Hub = request.app[HUB]
+    name, kind, text = hub.store.export(request.match_info["list"], request.query.get("format", "json"))
+    return web.Response(text=text, content_type=kind, charset="utf-8", headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+async def api_vendors(request: web.Request) -> web.Response:
+    return web.json_response(request.app[HUB].registry.meta)
+
+
+async def api_vendors_refresh(request: web.Request) -> web.Response:
+    hub: Hub = request.app[HUB]
+    meta = await asyncio.get_running_loop().run_in_executor(None, hub.registry.refresh)
+    await hub.names_changed()
+    return web.json_response(meta)
 
 
 async def handle_ws(request: web.Request) -> web.StreamResponse:
-    hub: Hub = request.app["hub"]
-    if not _local_only(request) or request.headers.get("Origin") is None:
-        raise web.HTTPForbidden()
+    hub: Hub = request.app[HUB]
     ws = web.WebSocketResponse(heartbeat=20)
     await ws.prepare(request)
     await ws.send_json(hub.hello())
@@ -207,7 +342,8 @@ async def handle_ws(request: web.Request) -> web.StreamResponse:
             if not isinstance(data, dict):
                 continue
             if data.get("type") == "rename":
-                await hub.rename(str(data.get("ieee", "")), str(data.get("name", "")))
+                hub.store.rename(str(data.get("ieee", "")), str(data.get("name", "")))
+                await hub.names_changed()
             elif data.get("type") == "channel" and isinstance(data.get("channel"), int):
                 await hub.tune(data["channel"])
     finally:
@@ -215,15 +351,33 @@ async def handle_ws(request: web.Request) -> web.StreamResponse:
     return ws
 
 
+def build_app(hub: Hub) -> web.Application:
+    app = web.Application(middlewares=[local_only], client_max_size=2 * 1024 * 1024)
+    app[HUB] = hub
+    app.add_routes([
+        web.get("/", handle_page), web.get("/devices", handle_page), web.get("/ws", handle_ws),
+        web.get("/static/{name}", handle_static), web.get("/locales", handle_locales), web.get("/locales/{code}.json", handle_locale),
+        web.get("/api/lists", api_lists), web.post("/api/lists", api_list_create),
+        web.patch("/api/lists/{list}", api_list_update), web.delete("/api/lists/{list}", api_list_delete),
+        web.put("/api/lists/{list}/devices/{ieee}", api_device_set), web.delete("/api/lists/{list}/devices/{ieee}", api_device_delete),
+        web.post("/api/lists/{list}/import", api_import), web.get("/api/lists/{list}/export", api_export),
+        web.get("/api/vendors", api_vendors), web.post("/api/vendors/refresh", api_vendors_refresh),
+    ])
+    return app
+
+
+def demo_store() -> DeviceStore:
+    store = DeviceStore(None)
+    store.lists["demo"] = {"name": "Demo network", "enabled": True, "devices": demo.names()}
+    return store
+
+
 async def serve(args) -> None:
     mode = "demo" if args.demo else "replay" if args.replay else "live"
-    if mode == "demo":
-        names_path, names, focus = None, demo.names(), args.focus
-    else:
-        names_path = Path(args.names)
-        names, focus = names_store.load(names_path), args.focus
-    info = {"channel": args.channel if mode == "live" else None, "mode": mode, "focus": focus, "can_tune": mode == "live"}
-    hub = Hub(names_path, names, info, args.backlog)
+    data_dir = Path(args.data_dir).expanduser()
+    store = demo_store() if mode == "demo" else DeviceStore(data_dir)
+    info = {"channel": args.channel if mode == "live" else None, "mode": mode, "focus": args.focus, "can_tune": mode == "live"}
+    hub = Hub(store, Registry(data_dir), info, args.backlog)
     queue: asyncio.Queue = asyncio.Queue()
     tasks = [asyncio.create_task(pump(queue, hub))]
     if mode == "demo":
@@ -234,10 +388,7 @@ async def serve(args) -> None:
         hub.source = LiveSource(asyncio.get_running_loop(), queue, args.channel, args.pcap)
         hub.source.thread.start()
 
-    app = web.Application()
-    app["hub"], app["port"] = hub, args.port
-    app.add_routes([web.get("/", handle_index), web.get("/ws", handle_ws)])
-    runner = web.AppRunner(app)
+    runner = web.AppRunner(build_app(hub))
     await runner.setup()
     await web.TCPSite(runner, "127.0.0.1", args.port).start()
     url = f"http://127.0.0.1:{args.port}/"

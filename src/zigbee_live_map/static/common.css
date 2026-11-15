@@ -1,0 +1,55 @@
+/* Shared by every page: theme tokens, base elements, buttons, chips, the settings dialog. */
+:root {
+  --bg: #04060e; --bg2: #0b1430; --panel: #0b1122; --panel2: #121a33; --ink: #e9eeff; --muted: #a9b6d9;
+  --line: #2a3760; --accent: #7fb2ff; --focusring: #ffd166; --ok: #7ee2a8; --warn: #ffb454; --bad: #ff9fb0;
+  --c-poll: #b9a2ff; --c-ack: #a4b0cc; --c-link_status: #5eead4; --c-route_request: #fdba74;
+  --c-route_record: #fde047; --c-data_direct: #7cb7ff; --c-data_multihop: #ff9fb0; --c-broadcast: #86efac;
+  --c-beacon: #f0abfc; --c-beacon_req: #e2c4ff; --c-join: #ffffff; --c-nwk_cmd: #cbd5e1; --c-mac_cmd: #cbd5e1;
+  --c-other: #9aa6c0; --c-foreign: #9aa6c0;
+  --n-coord: #9cc4ff; --n-router: #5fd4e0; --n-zed: #b9a2ff; --n-focus: #ffb454; --n-unknown: #9aa6c0;
+  --chipmix: 16%;
+}
+:root[data-theme="light"] {
+  --bg: #f4f6fb; --bg2: #e6ebf7; --panel: #ffffff; --panel2: #eef1f8; --ink: #141a2b; --muted: #465070;
+  --line: #c3cbe0; --accent: #1d4ed8; --focusring: #b45309; --ok: #166534; --warn: #9a3412; --bad: #9f1239;
+  --c-poll: #5b21b6; --c-ack: #374151; --c-link_status: #115e59; --c-route_request: #9a3412;
+  --c-route_record: #854d0e; --c-data_direct: #1e40af; --c-data_multihop: #9f1239; --c-broadcast: #166534;
+  --c-beacon: #86198f; --c-beacon_req: #6b21a8; --c-join: #111827; --c-nwk_cmd: #334155; --c-mac_cmd: #334155;
+  --c-other: #4b5563; --c-foreign: #4b5563;
+  --n-coord: #1e40af; --n-router: #0f766e; --n-zed: #6d28d9; --n-focus: #b45309; --n-unknown: #4b5563;
+  --chipmix: 10%;
+}
+* { box-sizing: border-box; }
+html { font-size: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 1rem/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+h1, h2, h3 { margin: 0; }
+a { color: var(--accent); }
+button, input, select { font: inherit; color: inherit; }
+button, select, a.btn { cursor: pointer; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: .3rem .7rem; color: var(--ink); text-decoration: none; display: inline-block; }
+button[aria-pressed="true"] { border-color: var(--accent); }
+button:disabled { opacity: .6; cursor: default; }
+input[type="text"], input:not([type]) { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: .3rem .5rem; color: var(--ink); }
+input[type="checkbox"], input[type="radio"] { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); }
+:focus-visible { outline: 3px solid var(--focusring); outline-offset: 2px; }
+.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.note { color: var(--muted); font-size: .95rem; }
+.brand { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 1.05rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+.brand i { color: var(--accent); font-style: normal; }
+.hud { display: flex; flex-wrap: wrap; gap: .5rem 1.3rem; align-items: center; padding: .6rem 1rem; background: var(--panel); border-bottom: 1px solid var(--line); }
+.hud .grow { flex: 1; }
+.chip { --c: var(--c-other); display: inline-flex; align-items: center; gap: .4rem; padding: .08rem .6rem; border-radius: 999px; font-size: .88rem; font-weight: 600; white-space: nowrap;
+  color: var(--c); background: color-mix(in srgb, var(--c) var(--chipmix), var(--panel)); border: 1px solid color-mix(in srgb, var(--c) 55%, var(--panel)); }
+button.chip[aria-pressed="false"] { color: var(--muted); background: transparent; border-style: dashed; border-color: var(--line); text-decoration: line-through; }
+.chip .n { font-family: ui-monospace, Menlo, monospace; font-weight: 400; }
+
+dialog.settings { width: min(34rem, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); }
+dialog.settings::backdrop { background: rgba(2, 4, 10, .6); }
+.settings header { display: flex; align-items: center; gap: 1rem; padding: .8rem 1rem; border-bottom: 1px solid var(--line); }
+.settings header h2 { flex: 1; font-size: 1.2rem; }
+.settings .body { padding: .4rem 1rem 1rem; overflow: auto; }
+.settings section, .settings fieldset { border: 0; border-top: 1px solid var(--line); margin: 0; padding: .9rem 0; }
+.settings section:first-child { border-top: 0; }
+.settings h3, .settings legend, .settings .lead { font-size: 1.05rem; font-weight: 700; padding: 0; margin: 0 0 .5rem; display: block; }
+.settings p { margin: .5rem 0 0; }
+.settings .row { display: flex; flex-wrap: wrap; gap: .4rem 1.2rem; align-items: center; }
+.settings label.opt { display: inline-flex; align-items: center; gap: .4rem; cursor: pointer; }

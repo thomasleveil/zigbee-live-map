@@ -1,44 +1,14 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Zigbee live map</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/common.css">
+<script src="/static/common.js"></script>
 <style>
-:root {
-  --bg: #04060e; --bg2: #0b1430; --panel: #0b1122; --panel2: #121a33; --ink: #e9eeff; --muted: #a9b6d9;
-  --line: #2a3760; --accent: #7fb2ff; --focusring: #ffd166; --ok: #7ee2a8; --warn: #ffb454; --bad: #ff9fb0;
-  --c-poll: #b9a2ff; --c-ack: #a4b0cc; --c-link_status: #5eead4; --c-route_request: #fdba74;
-  --c-route_record: #fde047; --c-data_direct: #7cb7ff; --c-data_multihop: #ff9fb0; --c-broadcast: #86efac;
-  --c-beacon: #f0abfc; --c-beacon_req: #e2c4ff; --c-join: #ffffff; --c-nwk_cmd: #cbd5e1; --c-mac_cmd: #cbd5e1;
-  --c-other: #9aa6c0; --c-foreign: #9aa6c0;
-  --n-coord: #9cc4ff; --n-router: #5fd4e0; --n-zed: #b9a2ff; --n-focus: #ffb454; --n-unknown: #9aa6c0;
-  --chipmix: 16%;
-}
-:root[data-theme="light"] {
-  --bg: #f4f6fb; --bg2: #e6ebf7; --panel: #ffffff; --panel2: #eef1f8; --ink: #141a2b; --muted: #465070;
-  --line: #c3cbe0; --accent: #1d4ed8; --focusring: #b45309; --ok: #166534; --warn: #9a3412; --bad: #9f1239;
-  --c-poll: #5b21b6; --c-ack: #374151; --c-link_status: #115e59; --c-route_request: #9a3412;
-  --c-route_record: #854d0e; --c-data_direct: #1e40af; --c-data_multihop: #9f1239; --c-broadcast: #166534;
-  --c-beacon: #86198f; --c-beacon_req: #6b21a8; --c-join: #111827; --c-nwk_cmd: #334155; --c-mac_cmd: #334155;
-  --c-other: #4b5563; --c-foreign: #4b5563;
-  --n-coord: #1e40af; --n-router: #0f766e; --n-zed: #6d28d9; --n-focus: #b45309; --n-unknown: #4b5563;
-  --chipmix: 10%;
-}
-* { box-sizing: border-box; }
-html { font-size: 100%; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 1rem/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-h1, h2, h3 { margin: 0; }
-button, input, select { font: inherit; color: inherit; }
-button, select { cursor: pointer; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: .3rem .7rem; }
-button[aria-pressed="true"] { border-color: var(--accent); }
-:focus-visible { outline: 3px solid var(--focusring); outline-offset: 2px; }
-.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
-
 .app { display: flex; flex-direction: column; height: 100vh; min-height: 44rem; }
-.hud { display: flex; flex-wrap: wrap; gap: .5rem 1.3rem; align-items: center; padding: .6rem 1rem; background: var(--panel); border-bottom: 1px solid var(--line); }
-.brand { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 1.05rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
-.brand span { color: var(--accent); }
 .pill { display: inline-flex; align-items: center; gap: .45rem; padding: .15rem .7rem; border: 1px solid currentColor; border-radius: 999px; font-family: ui-monospace, Menlo, monospace; font-size: .9rem; letter-spacing: .08em; }
 .pill i { width: .6rem; height: .6rem; border-radius: 50%; background: currentColor; }
 .pill.live { color: var(--ok); } .pill.live i { animation: blink 1.4s ease-in-out infinite; }
@@ -46,40 +16,43 @@ button[aria-pressed="true"] { border-color: var(--accent); }
 @keyframes blink { 50% { opacity: .25; } }
 .stat { font-family: ui-monospace, Menlo, monospace; font-size: .95rem; color: var(--muted); }
 .stat b { color: var(--ink); font-size: 1.05rem; }
-.stat select { padding: .1rem .3rem; color: var(--ink); }
+.stat select { padding: .1rem .3rem; }
 .verdict { font-family: ui-monospace, Menlo, monospace; font-size: .95rem; padding: .15rem .7rem; border-left: 4px solid var(--n-focus); background: var(--panel2); }
 .verdict b { color: var(--n-focus); }
 .verdict[hidden] { display: none; }
-.hud .grow { flex: 1; }
 
 .stage { display: grid; grid-template-columns: minmax(0, 1fr) 28rem; flex: 1; min-height: 0; }
 .left { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
 .legend { display: flex; flex-wrap: wrap; gap: .4rem; padding: .55rem .75rem; background: var(--panel); border-bottom: 1px solid var(--line); }
-.chip { --c: var(--c-other); display: inline-flex; align-items: center; gap: .4rem; padding: .08rem .6rem; border-radius: 999px; font-size: .88rem; font-weight: 600; white-space: nowrap;
-  color: var(--c); background: color-mix(in srgb, var(--c) var(--chipmix), var(--panel)); border: 1px solid color-mix(in srgb, var(--c) 55%, var(--panel)); }
-button.chip[aria-pressed="false"] { color: var(--muted); background: transparent; border-style: dashed; border-color: var(--line); text-decoration: line-through; }
-.chip .n { font-family: ui-monospace, Menlo, monospace; font-weight: 400; }
 .graphwrap { position: relative; flex: 1; min-height: 18rem; overflow: hidden; background: radial-gradient(ellipse at 50% 42%, var(--bg2), var(--bg) 72%); }
 #graph { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
 #rhythm { display: block; width: 100%; background: var(--panel); border-top: 1px solid var(--line); }
 .hint { position: absolute; right: .75rem; top: .6rem; margin: 0; color: var(--muted); font-size: .9rem; max-width: 20rem; text-align: right; pointer-events: none; }
 
 .side { display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
-.side header { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .6rem .8rem; border-bottom: 1px solid var(--line); }
+.side > header { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .6rem .8rem; border-bottom: 1px solid var(--line); }
 .side h2 { font-size: 1.05rem; flex: 1; }
-#devices { display: flex; flex-wrap: wrap; gap: .35rem; padding: .55rem .8rem; border-bottom: 1px solid var(--line); max-height: 11.5rem; overflow: auto; }
+#devices { display: flex; flex-wrap: wrap; gap: .35rem; padding: .55rem .8rem; border-bottom: 1px solid var(--line); max-height: 9.5rem; overflow: auto; }
 #devices button { font-size: .88rem; padding: .12rem .55rem; border-radius: 999px; }
 #devices button[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 22%, var(--panel)); }
+#issues { border-bottom: 1px solid var(--line); padding: .5rem .8rem; max-height: 30%; overflow: auto; flex: none; }
+#issues summary { cursor: pointer; font-weight: 700; }
+#issues summary .n { font-family: ui-monospace, Menlo, monospace; font-weight: 400; padding: 0 .45rem; border: 1px solid currentColor; border-radius: 999px; margin-left: .3rem; }
+#issues.has summary .n { color: var(--warn); }
+#issues ul { list-style: none; margin: .4rem 0 0; padding: 0; display: grid; gap: .3rem; }
+#issues li button { width: 100%; text-align: left; border-left: 4px solid var(--warn); font-size: .95rem; }
+#issues p { margin: .4rem 0 0; }
 #card { position: relative; flex: none; max-height: 46%; overflow: auto; background: var(--panel2); border-bottom: 1px solid var(--line); padding: .7rem .8rem; font-size: .95rem; }
 #card[hidden] { display: none; }
 #card h3 { font-size: 1.05rem; padding-right: 2.2rem; }
 #card dl { display: grid; grid-template-columns: max-content 1fr; gap: .15rem .7rem; margin: .5rem 0; }
 #card dt { color: var(--muted); } #card dd { margin: 0; word-break: break-word; }
+#card ul { margin: .2rem 0 .5rem; padding-left: 1.1rem; }
 #card .close { position: absolute; right: .5rem; top: .5rem; padding: .1rem .55rem; }
 #card form { display: flex; gap: .4rem; margin-top: .5rem; align-items: end; flex-wrap: wrap; }
-#card form[hidden] { display: none; }
+#card form[hidden], #btnWatch[hidden] { display: none; }
 #card label { display: grid; gap: .15rem; flex: 1; font-size: .9rem; color: var(--muted); }
-#card input { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: .3rem .5rem; min-width: 8rem; color: var(--ink); }
+#card input { min-width: 8rem; }
 #btnWatch { margin-top: .5rem; }
 #log { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; }
 #log li { padding: .45rem .8rem; border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent); }
@@ -100,13 +73,12 @@ button.chip[aria-pressed="false"] { color: var(--muted); background: transparent
 .lcard p { margin: .4rem 0 0; font-size: .95rem; }
 .concepts { columns: 2 22rem; column-gap: 1.6rem; }
 .concepts div { break-inside: avoid; margin-bottom: .9rem; }
-.note { color: var(--muted); font-size: .95rem; }
 
 @media (max-width: 1000px) {
   .app { height: auto; min-height: 0; }
   .stage { grid-template-columns: 1fr; }
   .left { border-right: 0; } .graphwrap { height: 68vh; flex: none; }
-  .side { height: 70vh; border-top: 1px solid var(--line); } .hint { display: none; }
+  .side { height: 80vh; border-top: 1px solid var(--line); } .hint { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .pill.live i, #log li.fresh { animation: none; } }
 </style>
@@ -114,43 +86,48 @@ button.chip[aria-pressed="false"] { color: var(--muted); background: transparent
 <body>
 <div class="app">
 <header class="hud">
-  <h1 class="brand">Zigbee <span>//</span> <span id="brand2" style="color:inherit">live map</span></h1>
+  <h1 class="brand">Zigbee <i>//</i> <span data-i18n="app.brand2"></span></h1>
   <span class="pill wait" id="conn" role="status"><i aria-hidden="true"></i><span id="connText"></span></span>
-  <span class="stat" id="chanBox"><label for="chan" id="lblChan"></label> <select id="chan"></select></span>
+  <span class="stat" id="chanBox" hidden><label for="chan" data-i18n="hud.channel"></label> <select id="chan"></select></span>
   <span class="stat" id="pan"></span>
-  <span class="stat"><b id="sTotal">0</b> <span id="lblFrames"></span></span>
+  <span class="stat"><b id="sTotal">0</b> <span data-i18n="hud.frames"></span></span>
   <span class="stat"><b id="sRate">0</b> /s</span>
-  <span class="stat"><b id="sNodes">0</b> <span id="lblDevices"></span></span>
+  <span class="stat"><b id="sNodes">0</b> <span data-i18n="hud.devices"></span></span>
   <span class="verdict" id="verdict" role="status" hidden></span>
   <span class="grow"></span>
-  <button type="button" id="btnAnim" aria-pressed="true"></button>
-  <button type="button" id="btnTheme"></button>
-  <button type="button" id="btnLang"></button>
+  <a class="btn" href="/devices" data-i18n="nav.devices"></a>
+  <button type="button" id="btnSettings" data-i18n="nav.settings"></button>
 </header>
 
 <div class="stage">
   <div class="left">
-    <div class="legend" id="legend" role="group"></div>
+    <div class="legend" id="legend" role="group" data-i18n-aria="map.legendAria"></div>
     <div class="graphwrap">
-      <canvas id="graph" role="img"></canvas>
-      <p class="hint" id="hint"></p>
+      <canvas id="graph" role="img" data-i18n-aria="map.graphAria"></canvas>
+      <p class="hint" data-i18n="map.hint"></p>
     </div>
-    <canvas id="rhythm" role="img"></canvas>
+    <canvas id="rhythm" role="img" data-i18n-aria="map.rhythmAria"></canvas>
   </div>
-  <aside class="side" id="side">
+  <aside class="side" data-i18n-aria="log.title">
     <header>
-      <h2 id="hLog"></h2>
+      <h2 data-i18n="log.title"></h2>
       <span class="note" id="logInfo" role="status"></span>
       <button type="button" id="btnFreeze" aria-pressed="false"></button>
     </header>
-    <div id="devices" role="group"></div>
+    <div id="devices" role="group" data-i18n-aria="devices.aria"></div>
+    <details id="issues">
+      <summary><span data-i18n="issues.title"></span><span class="n" id="issuesCount">0</span></summary>
+      <ul id="issuesList"></ul>
+      <p class="note" id="issuesNone" data-i18n="issues.none"></p>
+      <p class="note" data-i18n="issues.help"></p>
+    </details>
     <div id="card" hidden>
-      <button type="button" class="close" id="cardClose">×</button>
+      <button type="button" class="close" id="cardClose" data-i18n-aria="card.close">×</button>
       <div id="cardBody"></div>
       <button type="button" id="btnWatch" aria-pressed="false"></button>
       <form id="renameForm">
-        <label for="renameInput"><span id="lblRename"></span><input id="renameInput" maxlength="60" autocomplete="off"></label>
-        <button type="submit" id="btnSave"></button>
+        <label for="renameInput"><span data-i18n="card.rename"></span><input id="renameInput" type="text" maxlength="60" autocomplete="off"></label>
+        <button type="submit" data-i18n="card.save"></button>
       </form>
     </div>
     <ol id="log"></ol>
@@ -159,172 +136,34 @@ button.chip[aria-pressed="false"] { color: var(--muted); background: transparent
 </div>
 
 <main class="doc">
-  <section aria-labelledby="hLearn"><h2 id="hLearn"></h2><div class="learn" id="learn"></div></section>
-  <section aria-labelledby="hAnim"><h2 id="hAnim"></h2><div class="concepts" id="anim"></div></section>
-  <section aria-labelledby="hConcepts"><h2 id="hConcepts"></h2><div class="concepts" id="concepts"></div></section>
+  <section aria-labelledby="hLearn"><h2 id="hLearn" data-i18n="sec.learn"></h2><div class="learn" id="learn"></div></section>
+  <section aria-labelledby="hAnim"><h2 id="hAnim" data-i18n="sec.anim"></h2><div class="concepts" id="anim"></div></section>
+  <section aria-labelledby="hConcepts"><h2 id="hConcepts" data-i18n="sec.concepts"></h2><div class="concepts" id="concepts"></div></section>
 </main>
 
 <script>
 "use strict";
+const { t, esc, rich, prefs } = ZLM;
 const $ = id => document.getElementById(id);
-const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const CAT_ORDER = ["poll", "ack", "link_status", "route_request", "route_record", "data_direct", "data_multihop", "broadcast", "beacon_req", "beacon", "join", "nwk_cmd", "mac_cmd", "foreign", "other"];
 const HOP = new Set(["data_direct", "data_multihop", "route_record", "nwk_cmd", "join"]);
 const SPREAD = new Set(["broadcast", "route_request", "link_status"]);
 const BROADCAST = new Set(["0xffff", "0xfffd", "0xfffc", "0xfffb"]);
 const MAX_EVENTS = 20000, LOG_ROWS = 250, WINDOW_S = 120;
+const FORWARD_TIMEOUT_S = 12;        // a frame not relayed after this long is counted as not relayed
+const LINK_MIN_FRAMES = 20;          // below this, a retransmission rate says nothing
 const RM = matchMedia("(prefers-reduced-motion: reduce)").matches;
-const store = { get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }, set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (_) {} } };
-
-// ------------------------------------------------------------------ texts (English, French)
-const I18N = {
-  en: {
-    brand2: "live map", connecting: "connecting…", live: "live", demo: "demo network", replay: n => `replay ${n}`, absent: "sniffer not found", starting: "starting…", down: "disconnected",
-    channel: "channel", frames: "frames", devices: "devices", animOn: "Animations: on", animOff: "Animations: off", themeLight: "Light theme", themeDark: "Dark theme", lang: "Français",
-    legendAria: "Frame categories shown", graphAria: "Animated map of the Zigbee network. The device list on the right gives the same access from the keyboard.",
-    rhythmAria: "Frames per category over the last two minutes", hint: "Drag a node to move it, click it to filter the log.",
-    log: "Live log", freeze: "Freeze", resume: "Resume", frozen: n => `frozen, ${n} waiting`, filtered: n => `filtered on ${n}`, devicesAria: "Devices", all: "All",
-    close: "Close the device sheet", rename: "Device name", save: "Save", watch: "Watch this device", unwatch: "Stop watching", now: "now", everyone: "all",
-    roles: { coord: "Coordinator", router: "Router", zed: "End device", unknown: "Role not seen yet" },
-    card: { role: "Role", model: "Model", short: "Short address", ieee: "IEEE", notSeen: "not seen yet", parent: "Parent", children: "Children", none: "none", relayed: "Frames relayed",
-            exclBroadcast: n => `${n} (broadcasts excluded)`, polls: "Polls to its parent", sent: "Frames sent", rssi: "Received by the sniffer", last: "Last frame", ago: s => `${s} s ago`,
-            beacon: "Last beacon", beaconText: (zr, zed) => `routers ${zr ? "accepted" : "refused"}, end devices ${zed ? "accepted" : "refused"}` },
-    verdictWait: n => `${n}: not heard yet`,
-    verdict: (n, f) => `${n}: <b>${f.polls}</b> child poll(s) · <b>${f.relayed}</b> unicast relayed · ${f.rebroadcast} broadcast(s) repeated`,
-    verdictBeacon: open => ` · beacon: children ${open ? "ACCEPTED" : "refused"}`, verdictJoins: (ok, ko) => ` · associations: ${ok} accepted, ${ko} refused`,
-    bc: { "0xffff": "everyone", "0xfffd": "all devices that keep listening", "0xfffc": "all routers", "0xfffb": "all low-power routers" },
-    nwkLine: (a, b) => `NWK ${a} → ${b}`, radius: r => `radius ${r}`, bytes: n => `${n} bytes`,
-    hLearn: "What each colour means", hAnim: "Reading the animations", hConcepts: "The ideas you need to read this network",
-    cats: {
-      poll: ["Data request", "A sleeping end device wakes up and asks its parent whether a message is waiting for it. This is what reveals who is whose parent."],
-      ack: ["Acknowledgement", "Immediate \"got it\" from the direct neighbour, for one radio hop. Without it the sender retries. Hidden by default because it is very chatty."],
-      link_status: ["Link status", "Every router tells its direct neighbours (radius 1) how well it hears each of them, every 15 seconds. The network uses it to pick the best paths."],
-      route_request: ["Route request", "A network command flooded through all routers. From the coordinator it is probably a \"many-to-one\" announcement: it tells the whole network how to reach it."],
-      route_record: ["Route record (probable)", "A command sent to the coordinator. Each relay appends its own address, so the frame grows by 2 bytes per hop. The coordinator learns the way back."],
-      data_direct: ["Direct data", "An application message (measurement, command) delivered in a single hop: the radio sender is the author and the radio receiver is the recipient."],
-      data_multihop: ["Relayed data", "An application message on a multi-hop path: the radio address (MAC) differs from the author or the final recipient (NWK). A router is in the middle."],
-      broadcast: ["Broadcast", "A message for everyone. Each router repeats it once, which carries it across the whole network. Any router does this."],
-      beacon_req: ["Network search", "A device looking for a network to join, or to find again, asks nearby routers to show themselves."],
-      beacon: ["Beacon", "A router's answer to a network search. It says in clear whether it still accepts routers and end devices as children, and whether joining is open."],
-      join: ["Association", "A device asks a router to become its parent, and the router answers. The outcome (accepted, network full, denied) travels in clear."],
-      nwk_cmd: ["Network command", "Another network-layer command (leave, rejoin, channel change…). Its exact type is encrypted."],
-      mac_cmd: ["Radio command", "Another radio-layer (MAC) command."],
-      foreign: ["Neighbouring network", "A frame from another 802.15.4 network on the same channel (different PAN id), a neighbour's for instance. It is not part of your network and is kept off the map."],
-      other: ["Not decoded", "An 802.15.4 frame that is not readable Zigbee PRO (Green Power, another protocol, a damaged frame)."],
-    },
-    anim: [
-      ["A dot running along a line", "A frame addressed to one device: the dot leaves the radio sender and reaches the radio receiver. When a message crosses several routers you see the dots chain up, one hop after the other."],
-      ["A widening ring", "A broadcast: the device talks to everyone in range. The small regular teal rings are each router's link status. A large ring repeated from node to node is a broadcast spreading."],
-      ["A dotted line", "The parent-child relation, deduced from data requests: a battery device always polls its parent."],
-      ["A solid line", "A radio hop that addressed traffic has already used. It lights up on every passage, then fades."],
-    ],
-    concepts: [
-      ["Three roles", "The <b>coordinator</b> creates the network and runs it. <b>Routers</b> are mains-powered (plugs, meters) and forward other devices' messages. <b>End devices</b> (sensors, radiator valves) sleep to save their battery and go through a \"parent\" router."],
-      ["Two layers of addresses", "Every frame carries two pairs of addresses. The <b>MAC</b> layer says who transmits and who receives <i>this radio hop</i>. The <b>NWK</b> layer says who wrote the message and who it is finally for. When they differ, a router is relaying."],
-      ["Short address and IEEE", "The <b>short</b> address (like 0x2B01) is handed out when a device joins and can change. The <b>IEEE</b> address (64 bits) is burnt into the chip. It travels in the security header of each hop, which is how a short address is tied to a name."],
-      ["Radius", "The <b>radius</b> is the number of hops left. Every relaying router decreases it by 1. A broadcast that starts at 10 and shows up again at 9, then 8, is spreading through the mesh."],
-      ["Encryption", "Everything after the NWK header is encrypted with the network key, and this tool leaves it that way. You see who talks to whom, when and how much, never the content. Network commands are recognised by their shape, and marked \"probable\" when that is a deduction."],
-      ["What the sniffer hears", "The dongle only hears what reaches it. A distant device may be missing from the map, and the power shown (dBm) is what the sniffer received, not the link quality between two devices."],
-    ],
-    explain(e, x) {
-      const { ms, md, relay, L, who } = x;
-      switch (e.cat) {
-        case "poll": return `${L(ms)} wakes up and asks its parent ${L(md)} whether a message is waiting.`;
-        case "ack": return ms ? `${L(ms)} confirms to ${L(md)} that the previous frame arrived.` : "Acknowledgement of one radio hop.";
-        case "link_status": return `${L(ms)} tells its direct neighbours how well it hears them.`;
-        case "route_request": return relay ? `${L(ms)} repeats the route request from ${L(e.ns)} (radius left ${e.r}).` : `${L(e.ns)} floods a route request to the whole network (radius ${e.r}).`;
-        case "route_record": return relay ? `${L(ms)} relays to ${L(md)} the route record of ${L(e.ns)}, adding its own address (${e.len} bytes).` : `${L(e.ns)} sends its path to the coordinator through ${L(md)} (${e.len} bytes).`;
-        case "data_direct": return `${L(e.ns)} sends an encrypted message straight to ${L(e.nd)}.`;
-        case "data_multihop": return (relay ? `${L(ms)} relays a message from ${L(e.ns)} meant for ${L(e.nd)}, handing it to ${L(md)}.` : `${L(e.ns)} hands ${L(md)} a message meant for ${L(e.nd)}.`) + (e.relays && e.relays.length ? ` Route chosen by the sender: ${e.relays.map(L).join(", ")}.` : "");
-        case "broadcast": return relay ? `${L(ms)} repeats a broadcast from ${L(e.ns)} to spread it.` : `${L(e.ns)} broadcasts a message to ${who(e.nd)}.`;
-        case "beacon_req": return "A device is looking for a network and asks nearby routers to show themselves.";
-        case "beacon": { const b = e.bcn || {}; const yn = v => v ? "yes" : "no"; return `${L(ms)} shows itself. Accepts routers: ${yn(b.zr)}. Accepts end devices: ${yn(b.zed)}. Joining open: ${yn(b.permit)}.`; }
-        case "join": return e.st === undefined ? `${L(ms)} asks ${L(md)} to become its parent.` : `${L(ms)} answers the association request: ${({ 0: "accepted", 1: "refused, no room left (network full)", 2: "refused, access denied" })[e.st] || "code " + e.st}.`;
-        case "foreign": return `Frame from a neighbouring network (PAN ${e.pan})${e.rssi != null ? `, received at ${e.rssi} dBm` : ""}. It does not concern your network.`;
-        default: return this.cats[e.cat] ? this.cats[e.cat][1] : this.cats.other[1];
-      }
-    },
-  },
-  fr: {
-    brand2: "carte en direct", connecting: "connexion…", live: "en direct", demo: "réseau de démonstration", replay: n => `rejeu ${n}`, absent: "sniffer absent", starting: "démarrage…", down: "déconnecté",
-    channel: "canal", frames: "trames", devices: "appareils", animOn: "Animations : oui", animOff: "Animations : non", themeLight: "Thème clair", themeDark: "Thème sombre", lang: "English",
-    legendAria: "Catégories de trames affichées", graphAria: "Carte animée du réseau Zigbee. La liste des appareils à droite donne le même accès au clavier.",
-    rhythmAria: "Trames par catégorie sur les deux dernières minutes", hint: "Glisse un nœud pour le déplacer, clique dessus pour filtrer le journal.",
-    log: "Journal en direct", freeze: "Figer", resume: "Reprendre", frozen: n => `figé, ${n} en attente`, filtered: n => `filtré sur ${n}`, devicesAria: "Appareils", all: "Tous",
-    close: "Fermer la fiche", rename: "Nom de l'appareil", save: "Enregistrer", watch: "Surveiller cet appareil", unwatch: "Ne plus surveiller", now: "maintenant", everyone: "tous",
-    roles: { coord: "Coordinateur", router: "Routeur", zed: "Appareil final", unknown: "Rôle pas encore vu" },
-    card: { role: "Rôle", model: "Modèle", short: "Adresse courte", ieee: "IEEE", notSeen: "pas encore vue", parent: "Parent", children: "Enfants", none: "aucun", relayed: "Trames relayées",
-            exclBroadcast: n => `${n} (hors diffusions)`, polls: "Requêtes à son parent", sent: "Trames émises", rssi: "Reçu par le sniffer", last: "Dernière trame", ago: s => `il y a ${s} s`,
-            beacon: "Dernière balise", beaconText: (zr, zed) => `routeurs ${zr ? "acceptés" : "refusés"}, appareils finaux ${zed ? "acceptés" : "refusés"}` },
-    verdictWait: n => `${n} : pas encore entendu`,
-    verdict: (n, f) => `${n} : <b>${f.polls}</b> requête(s) d'enfant · <b>${f.relayed}</b> relais adressé(s) · ${f.rebroadcast} diffusion(s) ré-émise(s)`,
-    verdictBeacon: open => ` · balise : enfants ${open ? "ACCEPTÉS" : "refusés"}`, verdictJoins: (ok, ko) => ` · associations : ${ok} acceptée(s), ${ko} refusée(s)`,
-    bc: { "0xffff": "tous", "0xfffd": "tous les appareils à l'écoute", "0xfffc": "tous les routeurs", "0xfffb": "tous les routeurs basse consommation" },
-    nwkLine: (a, b) => `NWK ${a} → ${b}`, radius: r => `rayon ${r}`, bytes: n => `${n} octets`,
-    hLearn: "Ce que signifie chaque couleur", hAnim: "Lire les animations", hConcepts: "Les notions pour lire ce réseau",
-    cats: {
-      poll: ["Requête de données", "Un appareil final se réveille et demande à son parent s'il a des messages pour lui. C'est ce qui révèle qui est le parent de qui."],
-      ack: ["Accusé de réception", "Réponse immédiate « bien reçu » du voisin direct, pour un seul saut radio. Sans lui, l'émetteur réessaie. Masqué par défaut car très bavard."],
-      link_status: ["État des liens", "Chaque routeur annonce à ses voisins directs (rayon 1) la qualité de liaison qu'il mesure avec eux, toutes les 15 secondes. Sert à choisir les meilleurs chemins."],
-      route_request: ["Demande de route", "Diffusion d'une commande réseau à travers tous les routeurs. Venant du coordinateur, c'est probablement une annonce « many-to-one » : il dit à tout le réseau comment le rejoindre."],
-      route_record: ["Enregistrement de route (probable)", "Commande envoyée au coordinateur. Chaque relais y ajoute son adresse : la trame grossit de 2 octets par saut. Le coordinateur apprend ainsi le chemin retour."],
-      data_direct: ["Donnée directe", "Message applicatif (mesure, commande) livré en un seul saut : l'émetteur radio est l'auteur et le récepteur radio est le destinataire."],
-      data_multihop: ["Donnée relayée", "Message applicatif sur un chemin à plusieurs sauts : l'adresse radio (MAC) diffère de l'auteur ou du destinataire final (NWK). Un routeur fait l'intermédiaire."],
-      broadcast: ["Diffusion", "Message pour tout le monde. Chaque routeur le ré-émet une fois, ce qui le propage à tout le réseau. C'est normal pour n'importe quel routeur."],
-      beacon_req: ["Recherche de réseau", "Un appareil qui cherche à rejoindre ou à retrouver le réseau demande aux routeurs proches de se signaler."],
-      beacon: ["Balise", "Réponse d'un routeur à une recherche de réseau. Elle annonce en clair s'il accepte encore des routeurs et des appareils finaux comme enfants, et si l'appairage est ouvert."],
-      join: ["Association", "Un appareil demande à un routeur de devenir son parent, et le routeur répond. Le résultat (accepté, réseau complet, refusé) voyage en clair."],
-      nwk_cmd: ["Commande réseau", "Autre commande de la couche réseau (départ, rejoin, changement de canal…). Son type exact est chiffré."],
-      mac_cmd: ["Commande radio", "Autre commande de la couche radio (MAC)."],
-      foreign: ["Réseau voisin", "Trame d'un autre réseau 802.15.4 sur le même canal (identifiant PAN différent), par exemple celui d'un voisin. Elle ne fait pas partie de ton réseau et reste hors de la carte."],
-      other: ["Non décodée", "Trame 802.15.4 qui n'est pas du Zigbee PRO lisible (Green Power, autre protocole, trame abîmée)."],
-    },
-    anim: [
-      ["Un point qui file le long d'un trait", "Une trame adressée à un seul appareil : le point part de l'émetteur radio et arrive chez le récepteur radio. Quand un message traverse plusieurs routeurs, tu vois les points s'enchaîner, un saut après l'autre."],
-      ["Une onde qui s'élargit", "Une diffusion : l'appareil parle à tous ceux qui l'entendent. Les petites ondes turquoise régulières sont les états des liens de chaque routeur. Une grande onde reprise de proche en proche est une diffusion qui se propage."],
-      ["Un trait pointillé", "La relation parent-enfant, déduite des requêtes de données : un appareil sur pile interroge toujours son parent."],
-      ["Un trait plein", "Un saut radio déjà utilisé par du trafic adressé. Il s'illumine à chaque passage puis s'éteint doucement."],
-    ],
-    concepts: [
-      ["Trois rôles", "Le <b>coordinateur</b> crée le réseau et le dirige. Les <b>routeurs</b> sont alimentés en permanence (prises, compteurs) et transmettent les messages des autres. Les <b>appareils finaux</b> (capteurs, têtes de radiateur) dorment pour économiser leur pile et passent par un routeur « parent »."],
-      ["Deux couches d'adresses", "Chaque trame porte deux paires d'adresses. La couche <b>MAC</b> dit qui émet et qui reçoit <i>ce saut radio</i>. La couche <b>NWK</b> dit qui a écrit le message et à qui il est finalement destiné. Quand les deux diffèrent, un routeur est en train de relayer."],
-      ["Adresse courte et IEEE", "L'adresse <b>courte</b> (comme 0x2B01) est attribuée à la jonction et peut changer. L'adresse <b>IEEE</b> (64 bits) est gravée dans la puce. Elle voyage dans l'en-tête de sécurité de chaque saut, c'est elle qui relie une adresse courte à un nom."],
-      ["Le rayon", "Le <b>rayon</b> est le nombre de sauts restants. Chaque routeur qui relaie le diminue de 1. Une diffusion qui part à 10 et qu'on revoit à 9 puis 8 se propage dans le maillage."],
-      ["Le chiffrement", "Tout ce qui suit l'en-tête NWK est chiffré avec la clé du réseau, et cet outil n'y touche pas. On voit qui parle à qui, quand et combien, jamais le contenu. Les commandes réseau sont reconnues à leur forme, et marquées « probable » quand c'est une déduction."],
-      ["Ce que le sniffer entend", "La clé n'entend que ce qui arrive jusqu'à elle. Un appareil lointain peut manquer sur la carte, et la puissance affichée (dBm) est celle reçue par le sniffer, pas la qualité du lien entre deux appareils."],
-    ],
-    explain(e, x) {
-      const { ms, md, relay, L, who } = x;
-      switch (e.cat) {
-        case "poll": return `${L(ms)} se réveille et demande à son parent ${L(md)} s'il a un message en attente.`;
-        case "ack": return ms ? `${L(ms)} confirme à ${L(md)} avoir bien reçu la trame précédente.` : "Accusé de réception d'un saut radio.";
-        case "link_status": return `${L(ms)} annonce à ses voisins directs la qualité des liaisons qu'il mesure.`;
-        case "route_request": return relay ? `${L(ms)} ré-émet la demande de route de ${L(e.ns)} (rayon restant ${e.r}).` : `${L(e.ns)} diffuse une demande de route à tout le réseau (rayon ${e.r}).`;
-        case "route_record": return relay ? `${L(ms)} relaie vers ${L(md)} l'enregistrement de route de ${L(e.ns)} en y ajoutant sa propre adresse (${e.len} octets).` : `${L(e.ns)} envoie son chemin au coordinateur via ${L(md)} (${e.len} octets).`;
-        case "data_direct": return `${L(e.ns)} envoie un message chiffré directement à ${L(e.nd)}.`;
-        case "data_multihop": return (relay ? `${L(ms)} relaie un message de ${L(e.ns)} destiné à ${L(e.nd)}, en le passant à ${L(md)}.` : `${L(e.ns)} confie à ${L(md)} un message destiné à ${L(e.nd)}.`) + (e.relays && e.relays.length ? ` Route imposée par l'expéditeur : ${e.relays.map(L).join(", ")}.` : "");
-        case "broadcast": return relay ? `${L(ms)} ré-émet une diffusion de ${L(e.ns)} pour la propager.` : `${L(e.ns)} diffuse un message à ${who(e.nd)}.`;
-        case "beacon_req": return "Un appareil cherche un réseau et demande aux routeurs proches de se signaler.";
-        case "beacon": { const b = e.bcn || {}; const yn = v => v ? "oui" : "non"; return `${L(ms)} se signale. Accepte des routeurs : ${yn(b.zr)}. Accepte des appareils finaux : ${yn(b.zed)}. Appairage ouvert : ${yn(b.permit)}.`; }
-        case "join": return e.st === undefined ? `${L(ms)} demande à ${L(md)} de devenir son parent.` : `${L(ms)} répond à la demande d'association : ${({ 0: "acceptée", 1: "refusée, plus de place (réseau complet)", 2: "refusée, accès interdit" })[e.st] || "code " + e.st}.`;
-        case "foreign": return `Trame d'un réseau voisin (PAN ${e.pan})${e.rssi != null ? `, reçue à ${e.rssi} dBm` : ""}. Elle ne concerne pas ton réseau.`;
-        default: return this.cats[e.cat] ? this.cats[e.cat][1] : this.cats.other[1];
-      }
-    },
-  },
-};
-let lang = store.get("zlm-lang") || ((navigator.language || "en").toLowerCase().startsWith("fr") ? "fr" : "en");
-let T = I18N[lang];
-const catLabel = c => (T.cats[c] || T.cats.other)[0];
+const catLabel = c => t(`cat.${ZLM.has(`cat.${c}.label`) ? c : "other"}.label`);
+const catLearn = c => t(`cat.${ZLM.has(`cat.${c}.learn`) ? c : "other"}.learn`);
 
 // ------------------------------------------------------------------ state
-let S, pal, sel = null, frozen = false, animOn = !RM, ws = null, connOpen = false, sniffer = { sniffer: "starting", detail: "" }, pending = 0;
+let S, pal, sel = null, frozen = false, animOn = !RM && prefs.get("anim", "on") !== "off", ws = null, connOpen = false, sniffer = { sniffer: "starting", detail: "" }, pending = 0;
 const hidden = new Set(["ack"]), parts = [], rings = [];
 const dirty = { devices: true, card: true, legend: true };
-function newFocus() { return { polls: 0, relayed: 0, rebroadcast: 0, beacon: null, joins: [] }; }
+const newFocus = () => ({ polls: 0, relayed: 0, rebroadcast: 0, beacon: null, joins: [] });
 function reset() {
-  S = { pans: {}, hint: new Map(), nodes: new Map(), links: new Map(), events: [], counts: {}, ieee2addr: new Map(), names: {}, focusIeee: null, focusAddr: null,
-        total: 0, recent: [], pan: null, mode: "live", channel: null, canTune: false, focus: newFocus() };
+  S = { pans: {}, hint: new Map(), nodes: new Map(), links: new Map(), pairs: new Map(), waiting: new Map(), lastHandover: null, sweptAt: 0, ghostsAt: 0, events: [], counts: {},
+        ieee2addr: new Map(), names: {}, vendors: {}, focusIeee: null, focusAddr: null, total: 0, recent: [], pan: null, mode: "live", channel: null, canTune: false, focus: newFocus() };
   parts.length = 0; rings.length = 0;
 }
 reset();
@@ -332,28 +171,39 @@ reset();
 const key = a => (a && a.includes(":")) ? (S.ieee2addr.get(a) || a) : a;
 const nameOf = n => (n && n.ieee && S.names[n.ieee] && S.names[n.ieee].name) || null;
 const label = a => { const n = S.nodes.get(a); return nameOf(n) || a || "?"; };
-const who = a => BROADCAST.has(a) ? T.bc[a] : label(a);
+const who = a => BROADCAST.has(a) ? t("bc." + a) : label(a);
 const role = n => n.addr === "0x0000" ? "coord" : n.router ? "router" : n.zed ? "zed" : "unknown";
 const isFocus = n => !!S.focusIeee && n.ieee === S.focusIeee;
+const sleepyChildOf = (child, parent) => { const c = S.nodes.get(child); return !!(c && c.zed && !c.router && c.parent === parent); };
 
 function node(addr) {
   let n = S.nodes.get(addr);
   if (!n) {
     const a = Math.random() * 6.283, r = 140 + Math.random() * 90;
     n = { addr, ieee: null, router: false, zed: false, parent: null, x: Math.cos(a) * r, y: Math.sin(a) * r, vx: 0, vy: 0,
-          sent: 0, cats: {}, polls: 0, relayed: 0, pulse: 0, phase: Math.random() * 6.283, last: 0, rssi: null, beacon: null };
-    const hinted = S.hint.get(addr);                // short address from the names file, until the IEEE is heard
+          sent: 0, unicast: 0, retries: 0, cats: {}, polls: 0, relayed: 0, pulse: 0, phase: Math.random() * 6.283, last: 0, rssi: null, beacon: null, ghostAt: null,
+          fwd: { n: 0, sum: 0, max: 0, lost: 0 }, ind: { n: 0, sum: 0, max: 0, lost: 0 } };
+    const hinted = S.hint.get(addr);                // short address from a device list, until the IEEE is heard
     if (hinted && !S.ieee2addr.has(hinted)) { n.ieee = hinted; S.ieee2addr.set(hinted, addr); if (hinted === S.focusIeee) S.focusAddr = addr; }
     S.nodes.set(addr, n); dirty.devices = true;
   }
   return n;
 }
+const pairKey = (a, b) => a < b ? a + "|" + b : b + "|" + a;
 function link(a, b) {
-  const k = a < b ? a + "|" + b : b + "|" + a;
-  let l = S.links.get(k);
-  if (!l) { l = { a: a < b ? a : b, b: a < b ? b : a, count: 0, heat: 0 }; S.links.set(k, l); }
+  let l = S.links.get(pairKey(a, b));
+  if (!l) { l = { a: a < b ? a : b, b: a < b ? b : a, count: 0, heat: 0 }; S.links.set(pairKey(a, b), l); }
   return l;
 }
+// Delivery quality of a pair of devices: how often an addressed frame had to be sent again.
+function pair(a, b) {
+  let p = S.pairs.get(pairKey(a, b));
+  if (!p) { p = { a: a < b ? a : b, b: a < b ? b : a, frames: 0, retries: 0 }; S.pairs.set(pairKey(a, b), p); }
+  return p;
+}
+const retryRate = p => p ? Math.min(1, p.retries / Math.max(1, p.frames - p.retries)) : 0;
+const rated = p => !!p && p.frames - p.retries >= LINK_MIN_FRAMES;
+const quality = p => !rated(p) ? "unknown" : retryRate(p) >= .15 ? "poor" : retryRate(p) >= .05 ? "fair" : "good";
 
 // ------------------------------------------------------------------ event intake
 function tallyFocus(e, ms, md) {
@@ -366,8 +216,42 @@ function tallyFocus(e, ms, md) {
 function recountFocus() { S.focus = newFocus(); for (const e of S.events) if (e.cat !== "foreign") tallyFocus(e, key(e.ms), key(e.md)); }
 function setFocus(ieee, remember) {
   S.focusIeee = ieee || null; S.focusAddr = ieee ? (S.ieee2addr.get(ieee) || null) : null;
-  if (remember && S.mode !== "demo") store.set("zlm-focus", ieee || null);
+  if (remember && S.mode !== "demo") prefs.set("focus", ieee || null);
   recountFocus(); dirty.card = true;
+}
+// A router that receives a frame for someone else has to send it on. Measure how long that takes.
+function trackForward(e, ms, md) {
+  if (!HOP.has(e.cat) || e.q == null || !e.ns) return;
+  if (ms && ms !== e.ns) {
+    const k = `${ms}|${e.ns}|${e.q}|${e.nd}`, w = S.waiting.get(k);
+    if (w) { S.waiting.delete(k); const b = sleepyChildOf(e.nd, ms) ? S.nodes.get(ms).ind : S.nodes.get(ms).fwd, d = Math.max(0, e.t - w.t); b.n++; b.sum += d; b.max = Math.max(b.max, d); }
+  }
+  if (md && md !== e.nd) {
+    const k = `${md}|${e.ns}|${e.q}|${e.nd}`;
+    if (!S.waiting.has(k)) S.waiting.set(k, { t: e.t, router: md, from: ms, target: e.nd, acked: false });
+    S.lastHandover = k;                       // its acknowledgement, if any, is the very next frame
+  }
+  if (e.t - S.sweptAt >= 1) {
+    S.sweptAt = e.t;
+    for (const [k, w] of S.waiting) if (e.t - w.t > FORWARD_TIMEOUT_S) {
+      S.waiting.delete(k); const n = S.nodes.get(w.router);
+      if (n && w.acked) (sleepyChildOf(w.target, w.router) ? n.ind : n.fwd).lost++;   // never acknowledged: the router did not get it, the link is to blame
+    }
+  }
+}
+const GHOST_AFTER_S = 45;
+function removeNode(addr) {
+  S.nodes.delete(addr);
+  for (const map of [S.links, S.pairs]) for (const [k, v] of map) if (v.a === addr || v.b === addr) map.delete(k);
+  for (const [k, w] of S.waiting) if (w.router === addr) S.waiting.delete(k);
+  for (const n of S.nodes.values()) if (n.parent === addr) n.parent = null;
+  if (sel === addr) sel = null;
+  dirty.devices = dirty.card = true;
+}
+function sweepGhosts(now) {
+  if (now - S.ghostsAt < 1) return;
+  S.ghostsAt = now;
+  for (const n of [...S.nodes.values()]) if (n.ghostAt != null && now - n.ghostAt > GHOST_AFTER_S) removeNode(n.addr);
 }
 function processEvent(e, live) {
   if (e.pan && e.pan !== "0xffff") { S.pans[e.pan] = (S.pans[e.pan] || 0) + 1; if (!S.pan || S.pans[e.pan] > S.pans[S.pan]) S.pan = e.pan; }
@@ -381,10 +265,11 @@ function processEvent(e, live) {
   const ms = key(e.ms), md = key(e.md), toAll = BROADCAST.has(md);
   if (ms) {
     const n = node(ms); n.sent++; n.cats[e.cat] = (n.cats[e.cat] || 0) + 1; n.last = e.t;
+    if (e.cat !== "ack") n.ghostAt = null;       // still talking under this address: not a ghost
     if (e.rssi != null) n.rssi = e.rssi;
     if (e.ieee && !ms.includes(":") && n.ieee !== e.ieee) {
-      const stale = S.nodes.get(S.ieee2addr.get(e.ieee));     // a heard IEEE beats a short-address hint from the names file
-      if (stale && stale !== n && stale.ieee === e.ieee) stale.ieee = null;
+      const stale = S.nodes.get(S.ieee2addr.get(e.ieee));     // same device under a new short address (it rejoined), or a wrong hint
+      if (stale && stale !== n && stale.ieee === e.ieee) { stale.ieee = null; stale.ghostAt = e.t; }
       n.ieee = e.ieee; S.ieee2addr.set(e.ieee, ms); dirty.devices = true;
       if (e.ieee === S.focusIeee && S.focusAddr !== ms) { S.focusAddr = ms; S.events.pop(); recountFocus(); S.events.push(e); }
     }
@@ -396,7 +281,14 @@ function processEvent(e, live) {
   if (md && !toAll) node(md);
   if (e.ns && !BROADCAST.has(e.ns)) node(e.ns);
   if (e.nd && !BROADCAST.has(e.nd)) node(e.nd);
-  if (ms && md && !toAll && HOP.has(e.cat)) { const l = link(ms, md); l.count++; if (live) l.heat = 1; }
+  if (ms && md && !toAll && e.cat !== "ack") {
+    const p = pair(ms, md), n = S.nodes.get(ms); p.frames++; n.unicast++;
+    if (e.rt) { p.retries++; n.retries++; }
+    if (HOP.has(e.cat)) { const l = link(ms, md); l.count++; if (live) l.heat = 1; }
+    trackForward(e, ms, md);
+  }
+  if (e.cat === "ack" && ms) { const w = S.waiting.get(S.lastHandover); if (w && w.router === ms && w.from === md) w.acked = true; }
+  sweepGhosts(e.t);
   tallyFocus(e, ms, md);
   if (live) { if (!hidden.has(e.cat)) spawn(e, ms, md, toAll); logLive(e); }
   dirty.card = true;
@@ -405,13 +297,27 @@ function processEvent(e, live) {
 // ------------------------------------------------------------------ log
 const matches = e => !hidden.has(e.cat) && (!sel || [key(e.ms), key(e.md), e.ns, e.nd].includes(sel));
 const chip = (cat, extra = "") => `<span class="chip" style="--c:var(--c-${cat})">${esc(catLabel(cat))}${extra}</span>`;
-const explain = e => { const ms = key(e.ms), md = key(e.md); return T.explain(e, { ms, md, relay: e.ns && ms && e.ns !== ms, L: label, who }); };
+function explain(e) {
+  const ms = key(e.ms), md = key(e.md), relay = e.ns && ms && e.ns !== ms;
+  const v = { src: label(ms), dst: label(md), author: label(e.ns), target: who(e.nd), radius: e.r, bytes: e.len, pan: e.pan };
+  const yn = x => t(x ? "common.yes" : "common.no");
+  let text;
+  switch (e.cat) {
+    case "ack": text = !ms ? t("explain.ack.unknown") : t(e.fp ? "explain.ack.pending" : "explain.ack", v); break;
+    case "route_request": case "route_record": case "broadcast": text = t(`explain.${e.cat}.${relay ? "relay" : "origin"}`, v); break;
+    case "data_multihop": text = t(`explain.data_multihop.${relay ? "relay" : "origin"}`, v) + (e.relays && e.relays.length ? t("explain.data_multihop.route", { relays: e.relays.map(label).join(", ") }) : ""); break;
+    case "beacon": { const b = e.bcn || {}; text = t("explain.beacon", { ...v, zr: yn(b.zr), zed: yn(b.zed), permit: yn(b.permit) }); break; }
+    case "join": text = e.st === undefined ? t("explain.join.request", v) : t("explain.join.response", { ...v, status: ZLM.has("assoc." + e.st) ? t("assoc." + e.st) : t("assoc.other", { code: e.st }) }); break;
+    default: text = ZLM.has("explain." + e.cat) ? t("explain." + e.cat, v) : catLearn(e.cat);
+  }
+  return text + (e.rt ? t("explain.retry") : "");
+}
 function rowFor(e) {
   const d = new Date(e.t * 1000), ms = key(e.ms), md = key(e.md);
-  const t = d.toLocaleTimeString(lang === "fr" ? "fr-FR" : "en-GB", { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0");
+  const time = d.toLocaleTimeString(ZLM.lang, { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0");
   const li = document.createElement("li");
-  const l3 = [e.ns ? T.nwkLine(e.ns, e.nd) : null, e.r != null ? T.radius(e.r) : null, T.bytes(e.len), e.rssi != null ? `${e.rssi} dBm` : null].filter(Boolean).join(" · ");
-  li.innerHTML = `<div class="l1"><time>${t}</time>${chip(e.cat)}<span class="hop">${esc(ms || "?")} → ${esc(BROADCAST.has(md) ? T.everyone : (md || "?"))}</span></div><div class="l2">${esc(explain(e))}</div><div class="l3">${esc(l3)}</div>`;
+  const l3 = [e.ns ? t("log.nwk", { src: e.ns, dst: e.nd }) : null, e.r != null ? t("log.radius", { r: e.r }) : null, t("log.bytes", { n: e.len }), e.rssi != null ? `${e.rssi} dBm` : null, e.rt ? t("log.retry") : null].filter(Boolean).join(" · ");
+  li.innerHTML = `<div class="l1"><time>${time}</time>${chip(e.cat)}<span class="hop">${esc(ms || "?")} → ${esc(BROADCAST.has(md) ? t("common.everyone") : (md || "?"))}</span></div><div class="l2">${esc(explain(e))}</div><div class="l3">${esc(l3)}</div>`;
   return li;
 }
 function logLive(e) {
@@ -434,7 +340,7 @@ function loadPal() {
   const cs = getComputedStyle(document.documentElement);
   const rgb = v => { const h = cs.getPropertyValue(v).trim(); return [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)); };
   pal = { dark: document.documentElement.dataset.theme === "dark", bg: rgb("--bg"), ink: rgb("--ink"), muted: rgb("--muted"), line: rgb("--line"),
-          panel: rgb("--panel"), accent: rgb("--accent"), sel: rgb("--focusring"), cat: {}, node: {} };
+          panel: rgb("--panel"), accent: rgb("--accent"), sel: rgb("--focusring"), warn: rgb("--warn"), cat: {}, node: {} };
   for (const c of CAT_ORDER) pal.cat[c] = rgb("--c-" + c);
   for (const r of ["coord", "router", "zed", "focus", "unknown"]) pal.node[r] = rgb("--n-" + r);
   stars = null;
@@ -465,6 +371,8 @@ function spawn(e, ms, md, toAll) {
 }
 
 // ------------------------------------------------------------------ layout physics
+// Devices that often have to repeat themselves to each other are pushed apart: the worse the link, the longer the spring.
+const stretch = p => rated(p) ? 1 + Math.min(1.3, retryRate(p) * 4.5) : 1;
 let drag = null;
 function physics(dt) {
   const ns = [...S.nodes.values()], step = Math.min(2, dt * 60);
@@ -476,11 +384,11 @@ function physics(dt) {
     a.fx -= dx * f; a.fy -= dy * f; b.fx += dx * f; b.fy += dy * f;
   }
   const spring = (a, b, len, k) => { const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 1, f = k * (d - len); a.fx += dx / d * f; a.fy += dy / d * f; b.fx -= dx / d * f; b.fy -= dy / d * f; };
-  for (const n of ns) if (n.parent && S.nodes.has(n.parent)) spring(n, S.nodes.get(n.parent), 85, .035);
+  for (const n of ns) if (n.parent && S.nodes.has(n.parent)) spring(n, S.nodes.get(n.parent), 85 * stretch(S.pairs.get(pairKey(n.addr, n.parent))), .035);
   for (const l of S.links.values()) {
     const a = S.nodes.get(l.a), b = S.nodes.get(l.b); if (!a || !b) continue;
     const leaf = (a.zed && !a.router) || (b.zed && !b.router);
-    spring(a, b, leaf ? 95 : 190, leaf ? .02 : .012);
+    spring(a, b, (leaf ? 95 : 190) * stretch(S.pairs.get(pairKey(l.a, l.b))), leaf ? .02 : .012);
   }
   for (const n of ns) {
     const g = n.addr === "0x0000" ? .05 : .006; n.fx -= n.x * g; n.fy -= n.y * g;
@@ -523,6 +431,12 @@ function glow(x, y, r, c, a) {
   ctx.globalCompositeOperation = "lighter"; ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, 6.283); ctx.fill();
   ctx.globalCompositeOperation = "source-over";
 }
+function tag(text, x, y, border, ink) {
+  const tw = ctx.measureText(text).width + 12;
+  ctx.fillStyle = rgba(pal.panel, .88); ctx.strokeStyle = rgba(border, 1); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.rect(x - tw / 2, y - 10, tw, 20); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = rgba(ink, 1); ctx.fillText(text, x, y + .5);
+}
 function draw(ts) {
   const { w, h, dpr } = sizeCanvas(cv); cam.w = w; cam.h = h;
   if (w < 2 || h < 2) return;
@@ -536,21 +450,26 @@ function draw(ts) {
   const near = new Set([sel]);
   if (sel) { for (const l of S.links.values()) { if (l.a === sel) near.add(l.b); if (l.b === sel) near.add(l.a); } for (const n of ns) { if (n.parent === sel) near.add(n.addr); if (n.addr === sel && n.parent) near.add(n.parent); } }
   const dim = a => sel && !near.has(a) ? .3 : 1;
-  const now = performance.now();
+  const now = performance.now(), weak = [];
+  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.font = "13px ui-monospace, 'SF Mono', Menlo, monospace";
+  const troubled = (a, b) => { const p = S.pairs.get(pairKey(a, b)), q = quality(p); return q === "poor" || q === "fair" ? p : null; };
 
-  ctx.setLineDash([3, 6]); ctx.lineWidth = 1.2;                              // parent links
+  ctx.lineWidth = 1.2;                                                       // parent links
   for (const n of ns) if (n.parent && P.has(n.parent)) {
-    const [x1, y1] = P.get(n.addr), [x2, y2] = P.get(n.parent);
-    ctx.strokeStyle = rgba(pal.node.zed, (pal.dark ? .5 : .75) * (sel && n.addr !== sel && n.parent !== sel ? .3 : 1));
+    const [x1, y1] = P.get(n.addr), [x2, y2] = P.get(n.parent), vis = sel && n.addr !== sel && n.parent !== sel ? .3 : 1, bad = troubled(n.addr, n.parent);
+    ctx.setLineDash([3, 6]); ctx.lineWidth = bad ? 2 : 1.2;
+    ctx.strokeStyle = bad ? rgba(pal.warn, .95 * vis) : rgba(pal.node.zed, (pal.dark ? .5 : .75) * vis);
     ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    if (bad && !S.links.has(pairKey(n.addr, n.parent))) weak.push([(x1 + x2) / 2, (y1 + y2) / 2, bad, vis]);
   }
   ctx.setLineDash([]);
   for (const l of S.links.values()) {                                        // hop links
     const a = P.get(l.a), b = P.get(l.b); if (!a || !b) continue;
-    const vis = sel && l.a !== sel && l.b !== sel ? .3 : 1;
-    ctx.lineWidth = 1 + Math.min(3.5, Math.log2(l.count + 1) * .45) + l.heat * 1.5;
-    ctx.strokeStyle = rgba(pal.accent, ((pal.dark ? .16 : .35) + l.heat * .55) * vis);
+    const vis = sel && l.a !== sel && l.b !== sel ? .3 : 1, bad = troubled(l.a, l.b);
+    ctx.lineWidth = 1 + Math.min(3.5, Math.log2(l.count + 1) * .45) + l.heat * 1.5 + (bad ? 1 : 0);
+    ctx.strokeStyle = bad ? rgba(pal.warn, (.6 + l.heat * .4) * vis) : rgba(pal.accent, ((pal.dark ? .16 : .35) + l.heat * .55) * vis);
     ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+    if (bad) weak.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, bad, vis]);
     l.heat *= .965;
   }
   for (let i = rings.length - 1; i >= 0; i--) {                              // broadcasts
@@ -575,7 +494,8 @@ function draw(ts) {
       ctx.beginPath(); ctx.arc(x, y, size * (.45 + .55 * f), 0, 6.283); ctx.fill();
     }
   }
-  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.font = "13px ui-monospace, 'SF Mono', Menlo, monospace";
+  for (const [x, y, p, vis] of weak) { ctx.globalAlpha = vis; tag(`${Math.round(retryRate(p) * 100)} %`, x, y, pal.warn, pal.warn); }   // poor links say so in text
+  ctx.globalAlpha = 1;
   for (const n of ns) {                                                      // nodes and labels
     const [x, y] = P.get(n.addr), r = radius(n), c = colorOf(n), rl = role(n);
     ctx.globalAlpha = dim(n.addr);
@@ -588,10 +508,7 @@ function draw(ts) {
     else if (rl === "router") { ctx.beginPath(); ctx.arc(x, y, r + 4, 0, 6.283); ctx.stroke(); }
     if (isFocus(n)) { ctx.lineWidth = 2.2; ctx.beginPath(); ctx.arc(x, y, r + 8, 0, 6.283); ctx.stroke(); }
     if (sel === n.addr || hover === n.addr) { ctx.lineWidth = 2.5; ctx.strokeStyle = rgba(pal.sel, 1); ctx.beginPath(); ctx.arc(x, y, r + 12, 0, 6.283); ctx.stroke(); }
-    const text = nameOf(n) || n.addr, tw = ctx.measureText(text).width + 12, ty = y + r + 19;
-    ctx.fillStyle = rgba(pal.panel, .86); ctx.strokeStyle = rgba(isFocus(n) ? pal.node.focus : pal.line, 1); ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.rect(x - tw / 2, ty - 10, tw, 20); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = rgba(nameOf(n) ? pal.ink : pal.muted, 1); ctx.fillText(text, x, ty + .5);
+    tag(nameOf(n) || n.addr, x, y + r + 19, isFocus(n) ? pal.node.focus : pal.line, nameOf(n) ? pal.ink : pal.muted);
     ctx.globalAlpha = 1; n.pulse *= .93;
   }
 }
@@ -609,7 +526,7 @@ function drawRhythm() {
     g.fillStyle = rgba(pal.cat[e.cat], pal.dark ? .95 : 1); g.fillRect(R - (age / WINDOW_S) * (R - L) - .8, row * rowH + 5, 1.6, rowH - 7);
   }
   g.fillStyle = rgba(pal.muted, 1); g.textAlign = "center";
-  for (let s = 0; s <= WINDOW_S; s += 30) g.fillText(s ? `-${s}s` : T.now, Math.max(L + 18, Math.min(R - 40, R - (s / WINDOW_S) * (R - L))), cats.length * rowH + 14);
+  for (let s = 0; s <= WINDOW_S; s += 30) g.fillText(s ? `-${s}s` : t("common.now"), Math.max(L + 18, Math.min(R - 40, R - (s / WINDOW_S) * (R - L))), cats.length * rowH + 14);
 }
 
 // ------------------------------------------------------------------ panels
@@ -619,7 +536,7 @@ function renderLegend(force) {
     box.innerHTML = "";
     for (const k of cats) {
       const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.dataset.cat = k; b.style.setProperty("--c", `var(--c-${k})`);
-      b.innerHTML = `${esc(catLabel(k))} <span class="n"></span>`; b.title = (T.cats[k] || T.cats.other)[1];
+      b.innerHTML = `${esc(catLabel(k))} <span class="n"></span>`; b.title = catLearn(k);
       b.addEventListener("click", () => { hidden.has(k) ? hidden.delete(k) : hidden.add(k); renderLegend(); renderLog(); });
       box.appendChild(b);
     }
@@ -630,30 +547,68 @@ function renderDevices() {
   const box = $("devices"); box.innerHTML = "";
   const order = { coord: 0, router: 1, zed: 2, unknown: 3 };
   const list = [...S.nodes.values()].sort((a, b) => order[role(a)] - order[role(b)] || label(a.addr).localeCompare(label(b.addr)));
-  const all = document.createElement("button"); all.type = "button"; all.textContent = T.all; all.setAttribute("aria-pressed", String(!sel)); all.addEventListener("click", () => select(null)); box.appendChild(all);
+  const all = document.createElement("button"); all.type = "button"; all.textContent = t("devices.all"); all.setAttribute("aria-pressed", String(!sel)); all.addEventListener("click", () => select(null)); box.appendChild(all);
   for (const n of list) {
     const b = document.createElement("button"); b.type = "button";
     b.textContent = `${({ coord: "■", router: "●", zed: "○", unknown: "·" })[role(n)]} ${label(n.addr)}`;
-    b.setAttribute("aria-label", `${label(n.addr)}, ${T.roles[role(n)]}`); b.setAttribute("aria-pressed", String(sel === n.addr));
+    b.setAttribute("aria-label", `${label(n.addr)}, ${t("role." + role(n))}`); b.setAttribute("aria-pressed", String(sel === n.addr));
     b.addEventListener("click", () => select(n.addr)); box.appendChild(b);
   }
 }
+const ms1 = s => Math.round(s * 1000);
 function renderCard() {
   const card = $("card"); if (!sel || !S.nodes.has(sel)) { card.hidden = true; return; }
-  const n = S.nodes.get(sel), meta = (n.ieee && S.names[n.ieee]) || {}, C = T.card, rl = role(n);
+  const n = S.nodes.get(sel), meta = (n.ieee && S.names[n.ieee]) || {}, rl = role(n);
   const kids = [...S.nodes.values()].filter(k => k.parent === sel).map(k => label(k.addr));
-  const ago = n.last ? Math.max(0, Math.round(Date.now() / 1000 - n.last)) : null;
-  const rows = [[C.role, T.roles[rl]], meta.model ? [C.model, meta.model] : null, [C.short, n.addr], [C.ieee, n.ieee || C.notSeen],
-    n.parent ? [C.parent, label(n.parent)] : null,
-    rl !== "zed" ? [C.children, kids.length ? kids.join(", ") : C.none] : null,
-    rl !== "zed" ? [C.relayed, C.exclBroadcast(n.relayed)] : [C.polls, n.polls],
-    [C.sent, n.sent], n.rssi != null ? [C.rssi, `${n.rssi} dBm`] : null, ago != null ? [C.last, C.ago(ago)] : null,
-    n.beacon ? [C.beacon, C.beaconText(n.beacon.zr, n.beacon.zed)] : null].filter(Boolean);
+  const ago = n.last ? Math.max(0, Math.round(Date.now() / 1000 - n.last)) : null, c = k => t("card." + k);
+  const fwdTotal = n.fwd.n + n.fwd.lost;
+  const rows = [[c("role"), t("role." + rl)], meta.model ? [c("model"), meta.model] : null, n.ieee && S.vendors[n.ieee] ? [c("vendor"), S.vendors[n.ieee]] : null,
+    [c("short"), n.addr], [c("ieee"), n.ieee || c("notSeen")],
+    n.parent ? [c("parent"), label(n.parent)] : null,
+    rl !== "zed" ? [c("children"), kids.length ? kids.join(", ") : c("none")] : null,
+    rl !== "zed" ? [c("relayed"), t("card.relayedValue", { n: n.relayed })] : [c("polls"), n.polls],
+    [c("sent"), n.sent],
+    n.unicast ? [c("retries"), t("card.retriesValue", { n: n.retries, total: n.unicast, pct: Math.round(100 * n.retries / n.unicast) })] : null,
+    n.fwd.n ? [c("forward"), t("card.forwardValue", { avg: ms1(n.fwd.sum / n.fwd.n), max: ms1(n.fwd.max), n: n.fwd.n })] : null,
+    n.fwd.lost ? [c("notForwarded"), t("card.notForwardedValue", { n: n.fwd.lost, total: fwdTotal })] : null,
+    n.ind.n || n.ind.lost ? [c("indirect"), t("card.indirectValue", { n: n.ind.n, avg: n.ind.n ? (n.ind.sum / n.ind.n).toFixed(1) : "0", lost: n.ind.lost })] : null,
+    n.rssi != null ? [c("rssi"), `${n.rssi} dBm`] : null, ago != null ? [c("last"), t("card.ago", { s: ago })] : null,
+    n.beacon ? [c("beacon"), t("card.beaconValue", { zr: c(n.beacon.zr ? "accepted" : "refused"), zed: c(n.beacon.zed ? "accepted" : "refused") })] : null].filter(Boolean);
+  const links = [...S.pairs.values()].filter(p => p.a === sel || p.b === sel).sort((a, b) => b.frames - a.frames)
+    .map(p => `<li>${esc(t("card.linkRow", { name: label(p.a === sel ? p.b : p.a), frames: p.frames, pct: Math.round(retryRate(p) * 100) }))}</li>`).join("");
   $("cardBody").innerHTML = `<h3>${esc(label(sel))}</h3><dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
-    <p>${Object.entries(n.cats).sort((a, b) => b[1] - a[1]).map(([c, k]) => chip(c, ` <span class="n">${k}</span>`)).join(" ")}</p>`;
+    ${links ? `<div class="note">${esc(c("links"))}</div><ul>${links}</ul>` : ""}
+    <p>${Object.entries(n.cats).sort((a, b) => b[1] - a[1]).map(([cat, k]) => chip(cat, ` <span class="n">${k}</span>`)).join(" ")}</p>`;
   $("renameForm").hidden = !n.ieee; $("btnWatch").hidden = !n.ieee;
-  $("btnWatch").textContent = isFocus(n) ? T.unwatch : T.watch; $("btnWatch").setAttribute("aria-pressed", String(isFocus(n)));
+  $("btnWatch").textContent = t(isFocus(n) ? "card.unwatch" : "card.watch"); $("btnWatch").setAttribute("aria-pressed", String(isFocus(n)));
   card.hidden = false;
+}
+function findIssues() {
+  const out = [];
+  for (const p of S.pairs.values()) if (quality(p) === "poor")
+    out.push({ weight: 3 + retryRate(p), node: p.a, text: t("issues.link", { a: label(p.a), b: label(p.b), pct: Math.round(retryRate(p) * 100), frames: p.frames }) });
+  for (const n of S.nodes.values()) {
+    const name = label(n.addr), total = n.fwd.n + n.fwd.lost;
+    if (n.fwd.lost >= 3 && n.fwd.lost / total >= .05) out.push({ weight: 2 + n.fwd.lost / total, node: n.addr, text: t("issues.notForwarded", { name, n: n.fwd.lost, total }) });
+    if (n.fwd.n >= 10 && n.fwd.sum / n.fwd.n >= .1) out.push({ weight: 2, node: n.addr, text: t("issues.slow", { name, avg: ms1(n.fwd.sum / n.fwd.n) }) });
+    if (n.ind.lost >= 2) out.push({ weight: 1.5, node: n.addr, text: t("issues.indirect", { name, n: n.ind.lost }) });
+    if (n.rssi != null && n.rssi <= -88 && n.sent >= 5) out.push({ weight: 1, node: n.addr, text: t("issues.weak", { name, rssi: n.rssi }) });
+  }
+  if (S.total >= 200 && (S.counts.foreign || 0) / S.total >= .2) out.push({ weight: 1, node: null, text: t("issues.shared", { pct: Math.round(100 * S.counts.foreign / S.total) }) });
+  return out.sort((a, b) => b.weight - a.weight);
+}
+let issuesShown = "";
+function renderIssues() {
+  const found = findIssues(), signature = found.map(i => i.text).join("|");
+  if (signature === issuesShown) return;
+  issuesShown = signature;
+  $("issuesCount").textContent = found.length; $("issues").classList.toggle("has", found.length > 0); $("issuesNone").hidden = found.length > 0;
+  const list = $("issuesList"); list.innerHTML = "";
+  for (const issue of found) {
+    const li = document.createElement("li"), b = document.createElement("button"); b.type = "button"; b.textContent = issue.text;
+    if (issue.node) b.addEventListener("click", () => { if (sel !== issue.node) select(issue.node); }); else b.disabled = true;
+    li.appendChild(b); list.appendChild(li);
+  }
 }
 function select(addr) {
   sel = sel === addr ? null : addr;
@@ -661,48 +616,48 @@ function select(addr) {
   renderDevices(); renderCard(); renderLog();
 }
 function renderHud() {
-  const now = performance.now(); S.recent = S.recent.filter(t => now - t < 5000);
+  const now = performance.now(); S.recent = S.recent.filter(x => now - x < 5000);
   $("sTotal").textContent = S.total; $("sRate").textContent = (S.recent.length / 5).toFixed(1); $("sNodes").textContent = S.nodes.size;
   $("pan").textContent = S.pan ? `PAN ${S.pan}` : "";
-  const pill = $("conn"); let cls = "down", txt = T.down;
+  const pill = $("conn"); let cls = "down", txt = t("status.down");
   if (connOpen) {
-    if (sniffer.sniffer === "ok") { cls = "live"; txt = T.live; }
-    else if (sniffer.sniffer === "demo") { cls = "live"; txt = T.demo; }
-    else if (sniffer.sniffer === "replay") { cls = "live"; txt = T.replay(sniffer.detail); }
-    else if (sniffer.sniffer === "absent") { cls = "down"; txt = T.absent; }
-    else { cls = "wait"; txt = T.starting; }
-  } else if (!ws || ws.readyState === 0) { cls = "wait"; txt = T.connecting; }
+    if (sniffer.sniffer === "ok") { cls = "live"; txt = t("status.live"); }
+    else if (sniffer.sniffer === "demo") { cls = "live"; txt = t("status.demo"); }
+    else if (sniffer.sniffer === "replay") { cls = "live"; txt = t("status.replay", { name: sniffer.detail }); }
+    else if (sniffer.sniffer === "absent") { cls = "down"; txt = t("status.absent"); }
+    else { cls = "wait"; txt = t("status.starting"); }
+  } else if (!ws || ws.readyState === 0) { cls = "wait"; txt = t("status.connecting"); }
   pill.className = "pill " + cls; $("connText").textContent = txt; pill.title = sniffer.detail || "";
   const v = $("verdict"), f = S.focus; v.hidden = !S.focusIeee;
   if (S.focusIeee) {
     const name = (S.names[S.focusIeee] && S.names[S.focusIeee].name) || S.focusAddr || S.focusIeee;
-    if (!S.focusAddr) v.textContent = T.verdictWait(name);
-    else v.innerHTML = T.verdict(esc(name), f) + (f.beacon ? esc(T.verdictBeacon(f.beacon.zr || f.beacon.zed)) : "") + (f.joins.length ? esc(T.verdictJoins(f.joins.filter(s => s === 0).length, f.joins.filter(s => s !== 0).length)) : "");
+    if (!S.focusAddr) v.textContent = t("verdict.wait", { name });
+    else v.innerHTML = rich(t("verdict.text", { name, polls: f.polls, relayed: f.relayed, rebroadcast: f.rebroadcast })
+      + (f.beacon ? t(f.beacon.zr || f.beacon.zed ? "verdict.beacon.open" : "verdict.beacon.closed") : "")
+      + (f.joins.length ? t("verdict.joins", { ok: f.joins.filter(s => s === 0).length, ko: f.joins.filter(s => s !== 0).length }) : ""));
   }
-  $("logInfo").textContent = frozen ? T.frozen(pending) : (sel ? T.filtered(label(sel)) : "");
+  $("logInfo").textContent = frozen ? t("log.frozen", { n: pending }) : (sel ? t("log.filtered", { name: label(sel) }) : "");
 }
 
-// ------------------------------------------------------------------ language, theme, static text
-function applyLang() {
-  T = I18N[lang]; document.documentElement.lang = lang; document.title = lang === "fr" ? "Zigbee, carte en direct" : "Zigbee live map";
-  $("brand2").textContent = T.brand2; $("lblChan").textContent = T.channel; $("lblFrames").textContent = T.frames; $("lblDevices").textContent = T.devices;
-  $("btnAnim").textContent = animOn ? T.animOn : T.animOff; $("btnLang").textContent = T.lang; $("btnLang").lang = lang === "fr" ? "en" : "fr";
-  $("btnTheme").textContent = document.documentElement.dataset.theme === "dark" ? T.themeLight : T.themeDark;
-  $("legend").setAttribute("aria-label", T.legendAria); $("graph").setAttribute("aria-label", T.graphAria); $("rhythm").setAttribute("aria-label", T.rhythmAria);
-  $("hint").textContent = T.hint; $("hLog").textContent = T.log; $("side").setAttribute("aria-label", T.log); $("btnFreeze").textContent = frozen ? T.resume : T.freeze;
-  $("devices").setAttribute("aria-label", T.devicesAria); $("cardClose").setAttribute("aria-label", T.close); $("lblRename").textContent = T.rename; $("btnSave").textContent = T.save;
-  $("hLearn").textContent = T.hLearn; $("hAnim").textContent = T.hAnim; $("hConcepts").textContent = T.hConcepts;
-  $("learn").innerHTML = CAT_ORDER.map(k => `<div class="lcard" style="--c:var(--c-${k})">${chip(k)}<p>${esc(T.cats[k][1])}</p></div>`).join("");
-  $("anim").innerHTML = T.anim.map(([h, p]) => `<div><h3>${esc(h)}</h3><p>${esc(p)}</p></div>`).join("");
-  $("concepts").innerHTML = T.concepts.map(([h, p]) => `<div><h3>${esc(h)}</h3><p>${p}</p></div>`).join("");
-  renderLegend(true); renderDevices(); renderCard(); renderLog(); renderHud();
+// ------------------------------------------------------------------ language, theme, settings
+function numbered(prefix) { const out = []; for (let i = 1; ZLM.has(`${prefix}.${i}.title`); i++) out.push([t(`${prefix}.${i}.title`), t(`${prefix}.${i}.body`)]); return out; }
+function renderTexts() {
+  document.title = `Zigbee ${t("app.brand2")}`;
+  $("btnFreeze").textContent = t(frozen ? "log.resume" : "log.freeze");
+  $("learn").innerHTML = CAT_ORDER.map(k => `<div class="lcard" style="--c:var(--c-${k})">${chip(k)}<p>${esc(catLearn(k))}</p></div>`).join("");
+  $("anim").innerHTML = numbered("anim").map(([h, p]) => `<div><h3>${esc(h)}</h3><p>${rich(p)}</p></div>`).join("");
+  $("concepts").innerHTML = numbered("concepts").map(([h, p]) => `<div><h3>${esc(h)}</h3><p>${rich(p)}</p></div>`).join("");
+  issuesShown = ""; renderLegend(true); renderDevices(); renderCard(); renderIssues(); renderLog(); renderHud();
 }
-function setTheme(t) { document.documentElement.dataset.theme = t; store.set("zlm-theme", t); loadPal(); $("btnTheme").textContent = t === "dark" ? T.themeLight : T.themeDark; }
-$("btnTheme").addEventListener("click", () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
-$("btnLang").addEventListener("click", () => { lang = lang === "fr" ? "en" : "fr"; store.set("zlm-lang", lang); applyLang(); });
-$("btnAnim").addEventListener("click", () => { animOn = !animOn; $("btnAnim").setAttribute("aria-pressed", String(animOn)); $("btnAnim").textContent = animOn ? T.animOn : T.animOff; });
-$("btnFreeze").addEventListener("click", () => { frozen = !frozen; $("btnFreeze").setAttribute("aria-pressed", String(frozen)); $("btnFreeze").textContent = frozen ? T.resume : T.freeze; if (!frozen) renderLog(); });
-$("btnAnim").setAttribute("aria-pressed", String(animOn));
+document.addEventListener("zlm:lang", renderTexts);
+document.addEventListener("zlm:theme", loadPal);
+ZLM.setExtras(box => {
+  box.innerHTML = `<label class="opt"><input type="checkbox" id="optAnim"><span data-i18n="settings.animations"></span></label>`;
+  const input = box.querySelector("#optAnim"); input.checked = animOn;
+  input.addEventListener("change", () => { animOn = input.checked; prefs.set("anim", animOn ? null : "off"); });
+});
+$("btnSettings").addEventListener("click", () => ZLM.openSettings());
+$("btnFreeze").addEventListener("click", () => { frozen = !frozen; $("btnFreeze").setAttribute("aria-pressed", String(frozen)); $("btnFreeze").textContent = t(frozen ? "log.resume" : "log.freeze"); if (!frozen) renderLog(); });
 for (let c = 11; c <= 26; c++) { const o = document.createElement("option"); o.value = c; o.textContent = c; $("chan").appendChild(o); }
 $("chan").addEventListener("change", () => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "channel", channel: Number($("chan").value) })); });
 
@@ -729,9 +684,10 @@ $("renameForm").addEventListener("submit", ev => {
 });
 
 // ------------------------------------------------------------------ websocket
-function setNames(names) {
+function setNames(names, vendors) {
   S.names = names || {}; S.hint = new Map();
   for (const [ieee, m] of Object.entries(S.names)) if (m && m.nwk) S.hint.set(String(m.nwk).toLowerCase(), ieee);
+  if (vendors) S.vendors = vendors;
 }
 function connect() {
   ws = new WebSocket(`ws://${location.host}/ws`);
@@ -740,31 +696,36 @@ function connect() {
   ws.onmessage = m => {
     const d = JSON.parse(m.data);
     if (d.type === "hello") {
-      reset(); sel = null; setNames(d.names); S.mode = d.mode; S.channel = d.channel; S.canTune = !!d.can_tune;
-      S.focusIeee = (d.mode !== "demo" && store.get("zlm-focus")) || d.focus || null;
+      reset(); sel = null; setNames(d.names, d.vendors || {}); S.mode = d.mode; S.channel = d.channel; S.canTune = !!d.can_tune;
+      S.focusIeee = (d.mode !== "demo" && prefs.get("focus", null)) || d.focus || null;
       $("chanBox").hidden = !S.canTune; if (S.channel) $("chan").value = S.channel;
-      $("log").innerHTML = ""; dirty.devices = dirty.card = dirty.legend = true; renderLegend(true);
+      $("log").innerHTML = ""; issuesShown = "\u0000"; dirty.devices = dirty.card = dirty.legend = true; renderLegend(true);
     }
     else if (d.type === "backlog") { for (const e of d.events) processEvent(e, false); renderLog(); }
     else if (d.type === "ev") processEvent(d.e, true);
-    else if (d.type === "names") { setNames(d.names); dirty.devices = dirty.card = true; renderLog(); }
+    else if (d.type === "names") { setNames(d.names, d.vendors); dirty.devices = dirty.card = true; renderLog(); }
+    else if (d.type === "vendors") { Object.assign(S.vendors, d.vendors); dirty.card = true; }
     else if (d.type === "status") sniffer = d;
   };
 }
 
 // ------------------------------------------------------------------ start
-document.documentElement.dataset.theme = store.get("zlm-theme") === "light" ? "light" : "dark";
-loadPal(); applyLang(); connect();
-let last = performance.now();
-function frame(ts) { physics(Math.min(.05, (ts - last) / 1000)); last = ts; draw(ts); requestAnimationFrame(frame); }
-requestAnimationFrame(frame);
-setInterval(() => {
-  renderHud(); drawRhythm();
-  if (dirty.legend) { renderLegend(); dirty.legend = false; }
-  if (dirty.devices) { renderDevices(); dirty.devices = false; }
-  if (dirty.card) { renderCard(); dirty.card = false; }
-}, 400);
-window.zigbeeLiveMap = { get state() { return S; }, parts, rings };
+(async () => {
+  loadPal();
+  await ZLM.init();                 // loads the texts, then fires zlm:lang, which renders them
+  connect();
+  let last = performance.now(), ticks = 0;
+  const frame = ts => { physics(Math.min(.05, (ts - last) / 1000)); last = ts; draw(ts); requestAnimationFrame(frame); };
+  requestAnimationFrame(frame);
+  setInterval(() => {
+    renderHud(); drawRhythm();
+    if (dirty.legend) { renderLegend(); dirty.legend = false; }
+    if (dirty.devices) { renderDevices(); dirty.devices = false; }
+    if (dirty.card) { renderCard(); dirty.card = false; }
+    if (++ticks % 5 === 0) renderIssues();
+  }, 400);
+})();
+window.zigbeeLiveMap = { get state() { return S; }, parts, rings, findIssues };
 </script>
 </body>
 </html>
