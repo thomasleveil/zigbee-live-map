@@ -48,6 +48,7 @@ const ZLM = (() => {
     for (const el of root.querySelectorAll("[data-i18n]")) el.textContent = t(el.dataset.i18n);
     for (const el of root.querySelectorAll("[data-i18n-aria]")) el.setAttribute("aria-label", t(el.dataset.i18nAria));
     for (const el of root.querySelectorAll("[data-i18n-placeholder]")) el.placeholder = t(el.dataset.i18nPlaceholder);
+    for (const el of root.querySelectorAll("[data-i18n-title]")) el.title = t(el.dataset.i18nTitle);
   }
   async function applyLang() {
     lang = resolveLang(prefs.get("lang", "auto"));

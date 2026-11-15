@@ -112,16 +112,16 @@
 <header class="hud">
   <h1 class="brand">Zigbee <i>//</i> <span data-i18n="app.brand2"></span></h1>
   <span class="pill wait" id="conn" role="status"><i aria-hidden="true"></i><span id="connText"></span></span>
-  <span class="stat" id="chanBox" hidden><label for="chan" data-i18n="hud.channel"></label> <select id="chan"></select></span>
-  <span class="stat" id="pan"></span>
-  <span class="stat"><b id="sTotal">0</b> <span data-i18n="hud.frames"></span></span>
-  <span class="stat"><b id="sRate">0</b> /s</span>
-  <span class="stat"><b id="sNodes">0</b> <span data-i18n="hud.devices"></span></span>
+  <span class="stat" id="chanBox" hidden data-i18n-title="tip.channel"><label for="chan" data-i18n="hud.channel"></label> <select id="chan"></select></span>
+  <span class="stat" id="pan" data-i18n-title="tip.pan"></span>
+  <span class="stat" data-i18n-title="tip.frames"><b id="sTotal">0</b> <span data-i18n="hud.frames"></span></span>
+  <span class="stat" data-i18n-title="tip.rate"><b id="sRate">0</b> /s</span>
+  <span class="stat" data-i18n-title="tip.count"><b id="sNodes">0</b> <span data-i18n="hud.devices"></span></span>
   <span class="verdict" id="verdict" role="status" hidden></span>
   <span class="grow"></span>
-  <a class="btn" href="/devices" data-i18n="nav.devices"></a>
-  <button type="button" id="btnSecurity" data-i18n="nav.security"></button>
-  <button type="button" id="btnSettings" data-i18n="nav.settings"></button>
+  <a class="btn" href="/devices" data-i18n="nav.devices" data-i18n-title="tip.devices"></a>
+  <button type="button" id="btnSecurity" data-i18n="nav.security" data-i18n-title="tip.security"></button>
+  <button type="button" id="btnSettings" data-i18n="nav.settings" data-i18n-title="tip.settings"></button>
 </header>
 
 <div class="stage" id="stage">
@@ -132,7 +132,7 @@
     </div>
     <div id="cardBody"></div>
     <div class="detailActions">
-      <button type="button" id="btnWatch" aria-pressed="false"></button>
+      <button type="button" id="btnWatch" aria-pressed="false" data-i18n-title="tip.watch"></button>
       <form id="renameForm">
         <label for="renameInput"><span data-i18n="card.rename"></span><input id="renameInput" type="text" maxlength="60" autocomplete="off"></label>
         <button type="submit" data-i18n="card.save"></button>
@@ -151,7 +151,7 @@
     <header>
       <h2 data-i18n="log.title"></h2>
       <span class="note" id="logInfo" role="status"></span>
-      <button type="button" id="btnFreeze" aria-pressed="false"></button>
+      <button type="button" id="btnFreeze" aria-pressed="false" data-i18n-title="tip.freeze"></button>
     </header>
     <div id="devices" role="group" data-i18n-aria="devices.aria"></div>
     <details id="issues">
@@ -327,7 +327,7 @@ function processEvent(e, live) {
 
 // ------------------------------------------------------------------ log
 const matches = e => !hidden.has(e.cat) && (!sel || [key(e.ms), key(e.md), e.ns, e.nd].includes(sel));
-const chip = (cat, extra = "") => `<span class="chip" style="--c:var(--c-${cat})">${esc(catLabel(cat))}${extra}</span>`;
+const chip = (cat, extra = "") => `<span class="chip" title="${esc(catLearn(cat))}" style="--c:var(--c-${cat})">${esc(catLabel(cat))}${extra}</span>`;
 function explain(e) {
   const ms = key(e.ms), md = key(e.md), relay = e.ns && ms && e.ns !== ms;
   const v = { src: label(ms), dst: label(md), author: label(e.ns), target: who(e.nd), radius: e.r, bytes: e.len, pan: e.pan };
@@ -583,6 +583,7 @@ function renderDevices() {
     const b = document.createElement("button"); b.type = "button";
     b.textContent = `${({ coord: "■", router: "●", zed: "○", unknown: "·" })[role(n)]} ${label(n.addr)}`;
     b.setAttribute("aria-label", `${label(n.addr)}, ${t("role." + role(n))}`); b.setAttribute("aria-pressed", String(sel === n.addr));
+    b.title = t("tip.device", { role: t("role." + role(n)) });
     b.addEventListener("click", () => select(n.addr)); box.appendChild(b);
   }
 }
@@ -679,7 +680,7 @@ function renderHud() {
     else if (sniffer.sniffer === "absent") { cls = "down"; txt = t("status.absent"); }
     else { cls = "wait"; txt = t("status.starting"); }
   } else if (!ws || ws.readyState === 0) { cls = "wait"; txt = t("status.connecting"); }
-  pill.className = "pill " + cls; $("connText").textContent = txt; pill.title = sniffer.detail || "";
+  pill.className = "pill " + cls; $("connText").textContent = txt; pill.title = sniffer.detail || t("tip.status");
   const v = $("verdict"), f = S.focus; v.hidden = !S.focusIeee;
   if (S.focusIeee) {
     const name = (S.names[S.focusIeee] && S.names[S.focusIeee].name) || S.focusAddr || S.focusIeee;
