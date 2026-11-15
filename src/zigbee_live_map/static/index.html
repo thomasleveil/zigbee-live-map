@@ -52,9 +52,6 @@
 .detailGroup.keyed { border-left: 3px solid var(--accent); }
 .detailGroup.keyed > h3 { color: var(--accent); }
 .detailActions { padding: .6rem .8rem; display: grid; gap: .5rem; }
-.probe { display: grid; gap: .3rem; margin-top: .3rem; border-top: 1px solid var(--line); padding-top: .5rem; }
-.probe > h3 { font-size: .9rem; }
-.probe button[disabled] { opacity: .55; cursor: not-allowed; }
 #card dl { display: grid; grid-template-columns: max-content 1fr; gap: .15rem .7rem; margin: .5rem 0; }
 #card dt { color: var(--muted); } #card dd { margin: 0; word-break: break-word; }
 #card ul { margin: .2rem 0 .5rem; padding-left: 1.1rem; }
@@ -140,12 +137,6 @@
         <label for="renameInput"><span data-i18n="card.rename"></span><input id="renameInput" type="text" maxlength="60" autocomplete="off"></label>
         <button type="submit" data-i18n="card.save"></button>
       </form>
-      <div class="probe">
-        <h3 data-i18n="probe.title"></h3>
-        <button type="button" disabled data-i18n="probe.ping"></button>
-        <button type="button" disabled data-i18n="probe.role"></button>
-        <p class="note" data-i18n="probe.passive"></p>
-      </div>
     </div>
   </aside>
   <div class="left">
