@@ -1,0 +1,4 @@
+name,model,ieee,nwk
+Coordinator,USB stick,02:00:00:00:00:00:00:01,0x0000
+Kitchen plug,Smart plug,02:00:00:00:00:00:00:02,0x1a2b
+Bedroom thermostat,Radiator valve,02:00:00:00:00:00:00:03,
