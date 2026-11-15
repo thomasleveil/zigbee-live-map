@@ -36,6 +36,16 @@ def test_link_costs_are_decoded_per_neighbour():
     ]
 
 
+def test_battery_is_read_from_a_power_config_report():
+    payload = decode.power_config_report(80)
+    frame = decode.build_secured_nwk(NET, seq=3, pan=0x1a62, mac_dst=0x0000, mac_src=0x72f6,
+                                     nwk_dst=0x0000, nwk_src=0x72f6, radius=30, nwk_seq=3,
+                                     src64=DEV64, counter=7, payload=payload)
+    assert decode.battery(frame, NET) == {"percent": 80}
+    assert decode.battery(frame, bytes(16)) is None     # wrong key: nothing
+    assert decode.identify(frame, NET) is None          # a Power Config report is not a Basic one
+
+
 def test_network_payload_round_trips():
     frame = decode.build_secured_nwk(NET, seq=1, pan=0x1a62, mac_dst=0x0000, mac_src=0x1234,
                                      nwk_dst=0x0000, nwk_src=0x1234, radius=30, nwk_seq=1,

@@ -299,6 +299,7 @@
   "card.idPower": "Power source",
   "card.costs": "Link costs this router measures",
   "card.costRow": "in {in}/7 · out {out}/7",
+  "card.battery": "Battery",
   "detail.clear": "Without the network key",
   "detail.keyed": "Thanks to the network key",
   "detail.keyless": "With this network's key, the model the device announces and the link costs the routers measure would appear here. Add the key in Settings.",
@@ -321,5 +322,6 @@
   "power.unknown": "unknown",
 
   "issues.vulnerable": "⚠ This network uses the default key: its network key can be recovered from any join. Open Security for details.",
-  "issues.cost": "{a} → {b}: the mesh itself rates this link poor (in {in}/7, out {out}/7; 7 is worst)"
+  "issues.cost": "{a} → {b}: the mesh itself rates this link poor (in {in}/7, out {out}/7; 7 is worst)",
+  "issues.battery": "{name}: battery low ({pct} %)"
 }

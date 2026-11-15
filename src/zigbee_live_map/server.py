@@ -78,6 +78,7 @@ class Hub:
         self.secure_join_seen = False             # a join was secured with a non-default link key
         self.identities: dict[str, dict] = {}     # NWK short address -> {manufacturer, model, power}
         self.link_quality: dict[str, list] = {}   # router NWK short address -> per-neighbour costs
+        self.batteries: dict[str, dict] = {}      # NWK short address -> {percent} or {volts}
         self.pan: str | None = None               # the dominant PAN heard, used to pick a saved key
         self._pan_counts: dict[str, int] = {}
 
@@ -97,6 +98,7 @@ class Hub:
             self.network_key, self.key_source = saved, "saved"
             self.identities.clear()
             self.link_quality.clear()
+            self.batteries.clear()
             await self.send_security()
 
     async def send_security(self) -> None:
@@ -105,7 +107,7 @@ class Hub:
     def hello(self) -> dict:
         return {"type": "hello", "version": __version__, **self.info, "names": self.store.merged(),
                 "vendors": self.vendors(), "security": self.security_state(),
-                "identities": self.identities, "linkCosts": self.link_quality}
+                "identities": self.identities, "linkCosts": self.link_quality, "batteries": self.batteries}
 
     async def send_all(self, message: dict) -> None:
         text = json.dumps(message, separators=(",", ":"))
@@ -156,11 +158,16 @@ class Hub:
             if rows is not None and self.link_quality.get(ns) != rows:
                 self.link_quality[ns] = rows
                 await self.send_all({"type": "linkcosts", "addr": ns, "rows": rows})
-        elif ns not in self.identities and event.get("cat", "").startswith("data"):
-            ident = decode.identify(frame, key)
-            if ident:
-                self.identities[ns] = ident
-                await self.send_all({"type": "identity", "addr": ns, "id": ident})
+        elif event.get("cat", "").startswith("data"):
+            info = decode.read_device(frame, key)   # one decrypt for both identity and battery
+            if info:
+                batt = info["battery"]
+                if batt is not None and self.batteries.get(ns) != batt:
+                    self.batteries[ns] = batt
+                    await self.send_all({"type": "battery", "addr": ns, "batt": batt})
+                if info["identity"] is not None and ns not in self.identities:
+                    self.identities[ns] = info["identity"]
+                    await self.send_all({"type": "identity", "addr": ns, "id": info["identity"]})
 
     async def set_status(self, sniffer: str, detail: str = "") -> None:
         self.status = {"type": "status", "sniffer": sniffer, "detail": detail}
@@ -181,6 +188,7 @@ class Hub:
         self.vulnerable = self.secure_join_seen = False
         self.identities.clear()
         self.link_quality.clear()
+        self.batteries.clear()
         self.pan = None
         self._pan_counts.clear()
         self.network_key = self.key_source = None
@@ -429,6 +437,7 @@ async def api_keys_set(request: web.Request) -> web.Response:
         hub.network_key, hub.key_source = key, "saved"
         hub.identities.clear()
         hub.link_quality.clear()
+        hub.batteries.clear()
         await hub.send_security()
     return web.json_response({"keys": hub.keys.describe(), "pan": hub.pan, "security": hub.security_state()})
 
@@ -441,6 +450,7 @@ async def api_keys_delete(request: web.Request) -> web.Response:
         hub.network_key = hub.key_source = None
         hub.identities.clear()
         hub.link_quality.clear()
+        hub.batteries.clear()
         await hub.send_security()
     return web.json_response({"keys": hub.keys.describe(), "pan": hub.pan, "security": hub.security_state()})
 

@@ -195,7 +195,7 @@ const newFocus = () => ({ polls: 0, relayed: 0, rebroadcast: 0, beacon: null, jo
 function reset() {
   S = { pans: {}, hint: new Map(), nodes: new Map(), links: new Map(), pairs: new Map(), waiting: new Map(), lastHandover: null, sweptAt: 0, ghostsAt: 0, events: [], counts: {},
         ieee2addr: new Map(), names: {}, vendors: {}, focusIeee: null, focusAddr: null, total: 0, recent: [], pan: null, mode: "live", channel: null, canTune: false, focus: newFocus(),
-        security: { vulnerable: false, secureJoinSeen: false, keyKnown: false, keySource: null, key: null }, identities: {}, costs: {} };
+        security: { vulnerable: false, secureJoinSeen: false, keyKnown: false, keySource: null, key: null }, identities: {}, costs: {}, batteries: {} };
   parts.length = 0; rings.length = 0;
 }
 reset();
@@ -602,7 +602,8 @@ function renderDevices() {
   const all = document.createElement("button"); all.type = "button"; all.textContent = t("devices.all"); all.setAttribute("aria-pressed", String(!sel)); all.addEventListener("click", () => select(null)); box.appendChild(all);
   for (const n of list) {
     const b = document.createElement("button"); b.type = "button";
-    b.textContent = `${({ coord: "■", router: "●", zed: "○", unknown: "·" })[role(n)]} ${label(n.addr)}`;
+    const bt = S.batteries[n.addr], bstr = bt ? (bt.percent != null ? ` 🔋${bt.percent}%` : ` 🔋${bt.volts}V`) : "";
+    b.textContent = `${({ coord: "■", router: "●", zed: "○", unknown: "·" })[role(n)]} ${label(n.addr)}${bstr}`;
     b.setAttribute("aria-label", `${label(n.addr)}, ${t("role." + role(n))}`); b.setAttribute("aria-pressed", String(sel === n.addr));
     b.title = t("tip.device", { role: t("role." + role(n)) });
     b.addEventListener("click", () => select(n.addr)); box.appendChild(b);
@@ -633,8 +634,10 @@ function renderCard() {
   const links = [...S.pairs.values()].filter(p => p.a === sel || p.b === sel).sort((a, b) => b.frames - a.frames)
     .map(p => `<li>${esc(t("card.linkRow", { name: label(p.a === sel ? p.b : p.a), frames: p.frames, pct: Math.round(retryRate(p) * 100) }))}</li>`).join("");
   // What only the network key reveals.
+  const batt = S.batteries[n.addr];
   const keyed = [id && id.manufacturer ? [c("idMaker"), id.manufacturer] : null, id && id.model ? [c("idModel"), id.model] : null,
-    id && id.power ? [c("idPower"), t("power." + (ZLM.has("power." + id.power) ? id.power : "unknown"))] : null].filter(Boolean);
+    id && id.power ? [c("idPower"), t("power." + (ZLM.has("power." + id.power) ? id.power : "unknown"))] : null,
+    batt ? [c("battery"), batt.percent != null ? `${batt.percent} %` : `${batt.volts} V`] : null].filter(Boolean);
   const costRows = S.costs[sel] || [];
   const costs = costRows.map(r => { const hi = r.incoming >= 5 || r.outgoing >= 5; return `<li><span>${esc(label(r.addr))}</span><span class="${hi ? "hi" : ""}">${esc(t("card.costRow", { in: r.incoming, out: r.outgoing }))}</span></li>`; }).join("");
   const dl = rows => `<dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`;
@@ -659,6 +662,8 @@ function findIssues() {
     const worst = Math.max(r.incoming, r.outgoing);
     if (worst >= 5) out.push({ weight: 5 + worst / 10, node: addr, text: t("issues.cost", { a: label(addr), b: label(r.addr), in: r.incoming, out: r.outgoing }) });
   }
+  for (const [addr, b] of Object.entries(S.batteries)) if (b.percent != null && b.percent <= 15)
+    out.push({ weight: 4 - b.percent / 100, node: addr, text: t("issues.battery", { name: label(addr), pct: b.percent }) });
   for (const p of S.pairs.values()) if (quality(p) === "poor")
     out.push({ weight: 3 + retryRate(p), node: p.a, text: t("issues.link", { a: label(p.a), b: label(p.b), pct: Math.round(retryRate(p) * 100), frames: p.frames }) });
   for (const n of S.nodes.values()) {
@@ -827,7 +832,7 @@ async function connect() {
       reset(); sel = null; setNames(d.names, d.vendors || {}); S.mode = d.mode; S.channel = d.channel; S.canTune = !!d.can_tune;
       S.focusIeee = (d.mode !== "demo" && prefs.get("focus", null)) || d.focus || null;
       if (d.security) S.security = d.security;
-      S.identities = d.identities || {}; S.costs = d.linkCosts || {};
+      S.identities = d.identities || {}; S.costs = d.linkCosts || {}; S.batteries = d.batteries || {};
       $("chanBox").hidden = !S.canTune; if (S.channel) $("chan").value = S.channel;
       $("log").innerHTML = ""; issuesShown = "\u0000"; dirty.devices = dirty.card = dirty.legend = dirty.security = true; renderLegend(true);
     }
@@ -838,6 +843,7 @@ async function connect() {
     else if (d.type === "security") { const { type, ...rest } = d; S.security = rest; dirty.security = true; dirty.card = true; issuesShown = "\u0000"; }
     else if (d.type === "identity") { S.identities[d.addr] = d.id; dirty.card = dirty.devices = true; }
     else if (d.type === "linkcosts") { S.costs[d.addr] = d.rows; dirty.card = true; issuesShown = "\u0000"; }
+    else if (d.type === "battery") { S.batteries[d.addr] = d.batt; dirty.card = dirty.devices = true; issuesShown = "\u0000"; }
     else if (d.type === "status") sniffer = d;
   };
 }

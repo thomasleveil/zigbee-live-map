@@ -299,6 +299,7 @@
   "card.idPower": "Alimentation",
   "card.costs": "Coûts de lien mesurés par ce routeur",
   "card.costRow": "entrant {in}/7 · sortant {out}/7",
+  "card.battery": "Batterie",
   "detail.clear": "Sans la clé réseau",
   "detail.keyed": "Grâce à la clé réseau",
   "detail.keyless": "Avec la clé de ce réseau, le modèle annoncé par l'appareil et les coûts de lien mesurés par les routeurs apparaîtraient ici. Ajoute la clé dans les Réglages.",
@@ -321,5 +322,6 @@
   "power.unknown": "inconnue",
 
   "issues.vulnerable": "⚠ Ce réseau utilise la clé par défaut : sa clé réseau peut être récupérée à partir de n'importe quelle association. Ouvrez Sécurité pour les détails.",
-  "issues.cost": "{a} → {b} : le maillage lui-même juge ce lien médiocre (entrant {in}/7, sortant {out}/7 ; 7 = pire)"
+  "issues.cost": "{a} → {b} : le maillage lui-même juge ce lien médiocre (entrant {in}/7, sortant {out}/7 ; 7 = pire)",
+  "issues.battery": "{name} : batterie faible ({pct} %)"
 }

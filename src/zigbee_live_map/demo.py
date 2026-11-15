@@ -37,6 +37,8 @@ END_DEVICES = {
     "0x7c07": ("Front door", "Contact sensor", COORDINATOR, -55),
 }
 NO_CHILDREN = {"0x2b04"}  # this router advertises that it accepts no child
+# Battery level each end device reports (one deliberately low, so the diagnostics flag it):
+BATTERY = {"0x7c01": 92, "0x7c02": 77, "0x7c03": 55, "0x7c04": 8, "0x7c05": 41, "0x7c06": 88, "0x7c07": 100}
 # Two deliberate faults, so that the diagnostics have something to show:
 WEAK_LINKS = {frozenset(("0x7c05", "0x2b03")): 0.22}  # share of frames that need a second attempt
 SLOW_RELAYS = {"0x2b03": (0.12, 0.26)}  # seconds a router takes to pass a frame on
@@ -165,11 +167,23 @@ class DemoNetwork:
                                          src64=eui_of(addr), counter=self._next(self.sec_ctr, addr), payload=payload)
         await self.secured(addr, frame)
 
+    async def battery_report(self, addr: str, percent: int) -> None:
+        """A battery device's ZCL Report on the Power Configuration cluster (percentage remaining)."""
+        frame = decode.build_secured_nwk(DEMO_NET_KEY, seq=self._next(self.mac_seq, addr), pan=PAN_ID,
+                                         mac_dst=int(self.parent.get(addr, COORDINATOR), 16), mac_src=int(addr, 16),
+                                         nwk_dst=int(COORDINATOR, 16), nwk_src=int(addr, 16), radius=30,
+                                         nwk_seq=self._next(self.nwk_seq, addr), src64=eui_of(addr),
+                                         counter=self._next(self.sec_ctr, addr), payload=decode.power_config_report(percent))
+        await self.secured(addr, frame)
+
     async def identities(self) -> None:
         await self.sleep(13)                             # after the first join has revealed the key
         while True:
             for addr, (_name, model, _parent, _rssi) in {**ROUTERS, **END_DEVICES}.items():
                 await self.announce(addr, model, addr in ROUTERS)
+                if addr in BATTERY:
+                    await self.sleep(0.2)
+                    await self.battery_report(addr, BATTERY[addr])
                 await self.sleep(2)
             await self.sleep(180)
 

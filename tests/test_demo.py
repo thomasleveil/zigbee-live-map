@@ -71,3 +71,6 @@ def test_demo_security_features_light_up_through_the_hub(tmp_path):
     assert hub.link_quality
     worst = max(max(r["incoming"], r["outgoing"]) for rows in hub.link_quality.values() for r in rows)
     assert worst >= 5  # the deliberately weak link shows up as a poor cost the mesh itself measured
+    # Battery devices report their level on the Power Configuration cluster.
+    percents = [b["percent"] for b in hub.batteries.values() if "percent" in b]
+    assert percents and min(percents) <= 15   # the deliberately low battery is caught

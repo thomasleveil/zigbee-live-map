@@ -182,5 +182,10 @@ def test_identity_and_link_costs_are_read_once_a_key_is_known(tmp_path):
         await hub.publish(status, 2.0, None)
         assert hub.link_quality["0x6ca5"] == [{"addr": "0x0000", "incoming": 1, "outgoing": 1},
                                               {"addr": "0x29e5", "incoming": 3, "outgoing": 5}]
+        batt = decode.build_secured_nwk(NET, seq=6, pan=0x1A62, mac_dst=0x0000, mac_src=0x72F6,
+                                        nwk_dst=0x0000, nwk_src=0x72F6, radius=30, nwk_seq=6,
+                                        src64=DEV64, counter=43, payload=decode.power_config_report(60))
+        await hub.publish(batt, 3.0, None)
+        assert hub.batteries["0x72f6"] == {"percent": 60}
 
     run(scenario, tmp_path)

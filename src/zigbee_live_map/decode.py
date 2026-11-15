@@ -22,6 +22,14 @@ from . import crypto
 ZCL_BASIC_CLUSTER = 0x0000
 ATTR_MANUFACTURER, ATTR_MODEL, ATTR_POWER_SOURCE = 0x0004, 0x0005, 0x0007
 POWER_SOURCE = {0: "unknown", 1: "mains", 2: "mains", 3: "battery", 4: "rechargeable"}
+POWER_CONFIG_CLUSTER = 0x0001
+ATTR_BATTERY_VOLTAGE, ATTR_BATTERY_PERCENT = 0x0020, 0x0021
+
+# ZCL simple-type byte lengths, enough to read the values we want and to skip past the ones we don't.
+ZCL_STRING_TYPES = {0x41, 0x42}
+ZCL_TYPE_LEN = {0x00: 0, 0x08: 1, 0x09: 2, 0x0a: 3, 0x0b: 4, 0x10: 1, 0x18: 1, 0x19: 2, 0x1a: 3, 0x1b: 4,
+                0x20: 1, 0x21: 2, 0x22: 3, 0x23: 4, 0x24: 5, 0x25: 6, 0x26: 7, 0x27: 8,
+                0x28: 1, 0x29: 2, 0x2a: 3, 0x2b: 4, 0x30: 1, 0x31: 2, 0x38: 2, 0x39: 4}
 
 
 class _Walk:
@@ -145,59 +153,96 @@ def decrypt_network_payload(frame: bytes, network_key: bytes) -> bytes | None:
 
 # --- reading the decrypted payload ----------------------------------------------------------
 
-def _zcl_basic_attrs(payload: bytes) -> dict:
-    """Pull manufacturer / model / power source from a ZCL Read-Attributes-Response on Basic."""
+def _zcl_values(payload: bytes) -> dict:
+    """Decode a ZCL Read-Attributes-Response (0x01) or Report-Attributes (0x0a) into {attr id: int|str}.
+    Integers and strings are read; other types are skipped by their length, so a wanted attribute after
+    them is still reached. A truly unknown type stops the walk (its length is unknowable)."""
     out: dict = {}
     try:
         w = _Walk(payload)
-        frame_control = w.u8()
-        if frame_control & 0x04:   # manufacturer-specific: skip manufacturer code
+        fc = w.u8()
+        if fc & 0x04:   # manufacturer-specific: skip the manufacturer code
             w.u16()
-        w.u8()   # transaction sequence
+        w.u8()          # transaction sequence
         command = w.u8()
-        if command != 0x01:   # Read Attributes Response
+        if command not in (0x01, 0x0a):
             return out
+        has_status = command == 0x01
         while w.pos < len(payload):
-            attr = w.u16(); status = w.u8()
-            if status != 0:
-                continue
+            attr = w.u16()
+            if has_status and w.u8() != 0:
+                continue    # a failed read is just attribute + status, no value
             dtype = w.u8()
-            if dtype in (0x41, 0x42):   # octet / character string
-                length = w.u8(); value = w.take(length)
-                text = value.decode("utf-8", "replace").strip("\x00 ")
-                if attr == ATTR_MANUFACTURER: out["manufacturer"] = text
-                elif attr == ATTR_MODEL: out["model"] = text
-            elif dtype in (0x20, 0x30):   # uint8 / enum8
-                value = w.u8()
-                if attr == ATTR_POWER_SOURCE: out["power"] = POWER_SOURCE.get(value & 0x7F, "unknown")
+            if dtype in ZCL_STRING_TYPES:
+                out[attr] = w.take(w.u8()).decode("utf-8", "replace").strip("\x00 ")
+            elif dtype in ZCL_TYPE_LEN:
+                out[attr] = int.from_bytes(w.take(ZCL_TYPE_LEN[dtype]), "little")
             else:
-                break   # unknown type: cannot keep walking safely
+                break
     except (IndexError, ValueError):
         pass
     return out
 
 
-def identify(frame: bytes, network_key: bytes) -> dict | None:
-    """Device identity announced in a decrypted ZCL Basic response, keyed by the NWK source address."""
+def read_cluster(frame: bytes, network_key: bytes) -> tuple[int, dict] | None:
+    """Decrypt a secured data frame once and return (ZCL cluster id, decoded attributes), or None."""
     payload = decrypt_network_payload(frame, network_key)
     if payload is None:
         return None
     try:
         w = _Walk(payload)
         afcf = w.u8()
-        if afcf & 0x03 != 0:   # APS data
+        if afcf & 0x03 != 0 or afcf & 0x01:   # APS data, not group-addressed
             return None
-        if afcf & 0x01:   # group addressing, no destination endpoint
-            return None
-        w.u8()   # destination endpoint
+        w.u8()             # destination endpoint
         cluster = w.u16()
-        if cluster != ZCL_BASIC_CLUSTER:
-            return None
         w.u16(); w.u8(); w.u8()   # profile, source endpoint, aps counter
-        attrs = _zcl_basic_attrs(payload[w.pos:])
-        return attrs or None
+        return cluster, _zcl_values(payload[w.pos:])
     except (IndexError, ValueError):
         return None
+
+
+def _basic_identity(attrs: dict) -> dict | None:
+    out: dict = {}
+    if isinstance(attrs.get(ATTR_MANUFACTURER), str): out["manufacturer"] = attrs[ATTR_MANUFACTURER]
+    if isinstance(attrs.get(ATTR_MODEL), str): out["model"] = attrs[ATTR_MODEL]
+    if isinstance(attrs.get(ATTR_POWER_SOURCE), int): out["power"] = POWER_SOURCE.get(attrs[ATTR_POWER_SOURCE] & 0x7F, "unknown")
+    return out or None
+
+
+def _battery(attrs: dict) -> dict | None:
+    pct = attrs.get(ATTR_BATTERY_PERCENT)
+    if isinstance(pct, int) and pct != 0xFF:     # 0xFF = unknown/unsupported; reported in half-percent
+        return {"percent": min(100, pct // 2)}
+    volt = attrs.get(ATTR_BATTERY_VOLTAGE)
+    if isinstance(volt, int) and volt not in (0, 0xFF):   # reported in units of 100 mV
+        return {"volts": round(volt / 10, 1)}
+    return None
+
+
+def identify(frame: bytes, network_key: bytes) -> dict | None:
+    """Device identity announced in a decrypted ZCL Basic response, keyed by the NWK source address."""
+    res = read_cluster(frame, network_key)
+    return _basic_identity(res[1]) if res and res[0] == ZCL_BASIC_CLUSTER else None
+
+
+def battery(frame: bytes, network_key: bytes) -> dict | None:
+    """Battery level a device reports on the Power Configuration cluster: {percent} or {volts}, or None."""
+    res = read_cluster(frame, network_key)
+    return _battery(res[1]) if res and res[0] == POWER_CONFIG_CLUSTER else None
+
+
+def read_device(frame: bytes, network_key: bytes) -> dict | None:
+    """One decrypt: whatever this ZCL report tells us about the device (identity and/or battery)."""
+    res = read_cluster(frame, network_key)
+    if res is None:
+        return None
+    cluster, attrs = res
+    if cluster == ZCL_BASIC_CLUSTER:
+        return {"identity": _basic_identity(attrs), "battery": None}
+    if cluster == POWER_CONFIG_CLUSTER:
+        return {"identity": None, "battery": _battery(attrs)}
+    return None
 
 
 def link_costs(frame: bytes, network_key: bytes) -> list[dict] | None:
@@ -260,6 +305,14 @@ def zcl_basic_response(manufacturer: str, model: str, power: int = 3, *, src_ep:
     body += attr(ATTR_MODEL, 0x42, bytes([len(model)]) + model.encode())
     body += attr(ATTR_POWER_SOURCE, 0x30, bytes([power]))
     aps = bytes([0x00, 0x01]) + ZCL_BASIC_CLUSTER.to_bytes(2, "little") + (0x0104).to_bytes(2, "little") + bytes([src_ep, seq & 0xFF])
+    return aps + body
+
+
+def power_config_report(percent: int, *, src_ep: int = 1, seq: int = 1) -> bytes:
+    """An APS-data payload: a ZCL Report-Attributes on Power Configuration, carrying battery percentage."""
+    body = bytes([0x00, seq & 0xFF, 0x0a])   # ZCL header: no manufacturer, seq, Report Attributes
+    body += ATTR_BATTERY_PERCENT.to_bytes(2, "little") + bytes([0x20, min(200, max(0, percent) * 2)])   # uint8, half-percent
+    aps = bytes([0x00, 0x01]) + POWER_CONFIG_CLUSTER.to_bytes(2, "little") + (0x0104).to_bytes(2, "little") + bytes([src_ep, seq & 0xFF])
     return aps + body
 
 
