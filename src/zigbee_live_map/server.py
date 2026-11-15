@@ -1,8 +1,13 @@
 """Local web server: frames in, events out over a WebSocket, pages to draw and manage them.
 
-It listens on 127.0.0.1 only. Every request must be addressed to that local host name, and every
-request that changes something must come from the page itself (same Origin), so a web site you
-visit cannot read your radio traffic or edit your device lists through your browser.
+It listens on 127.0.0.1 only, and a web site you visit must not be able to use your browser to
+read your radio traffic or edit your device lists. Three rules do that:
+
+- every request must be addressed to the local host name, which stops DNS rebinding;
+- plain reads (GET) are answered without any cross-origin permission, so the browser itself keeps
+  another site from seeing the answer. They are not filtered on Origin: browsers and extensions
+  attach that header to ordinary page resources in ways that cannot be predicted;
+- the live connection and every change must carry the Origin of this tool's own page.
 """
 
 from __future__ import annotations
@@ -10,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import sys
 import threading
 import time
 from collections import deque
@@ -205,9 +211,15 @@ async def local_only(request: web.Request, handler):
     port = request.transport.get_extra_info("sockname")[1]  # the port we really listen on
     hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
     origin = request.headers.get("Origin")
-    changes = request.method not in ("GET", "HEAD") or request.path == "/ws"
-    if request.host not in hosts or (origin is not None and origin not in {f"http://{h}" for h in hosts}) or (changes and origin is None):
-        raise web.HTTPForbidden()
+    guarded = request.method not in ("GET", "HEAD") or request.path == "/ws"
+    reason = None
+    if request.host not in hosts:
+        reason = "it is not addressed to this local server"
+    elif guarded and origin not in {f"http://{h}" for h in hosts}:
+        reason = "it does not come from this tool's own page"
+    if reason:
+        print(f"refused {request.method} {request.path}: {reason} (Host: {request.host}, Origin: {origin})", file=sys.stderr, flush=True)
+        raise web.HTTPForbidden(text=f"zigbee-live-map refused this request: {reason}.")
     try:
         return await handler(request)
     except (DeviceError, VendorError) as exc:

@@ -31,14 +31,26 @@ def test_pages_texts_and_static_files_are_served(tmp_path):
     run(scenario, tmp_path)
 
 
+def test_page_resources_load_whatever_origin_header_the_browser_adds(tmp_path):
+    """Some browsers and extensions attach an Origin header to plain same-page resources."""
+    async def scenario(client, hub, origin):
+        for header in ({"Origin": "null"}, {"Origin": "http://something.else"}, origin, {}):
+            for path in ("/", "/devices", "/static/common.css", "/static/common.js", "/locales", "/locales/en.json", "/api/lists", "/api/vendors"):
+                assert (await client.get(path, headers=header)).status == 200, (path, header)
+
+    run(scenario, tmp_path)
+
+
 def test_other_sites_cannot_read_or_change_anything(tmp_path):
     async def scenario(client, hub, origin):
         evil = {"Origin": "http://evil.example"}
-        assert (await client.get("/api/lists", headers=evil)).status == 403
-        assert (await client.get("/api/lists", headers={"Host": "evil.example"})).status == 403
+        assert (await client.get("/api/lists", headers={"Host": "evil.example"})).status == 403  # DNS rebinding
         assert (await client.post("/api/lists", json={"name": "x"}, headers=evil)).status == 403
         assert (await client.post("/api/lists", json={"name": "x"})).status == 403  # no Origin: not our page
         assert (await client.get("/ws")).status == 403
+        assert (await client.get("/ws", headers=evil)).status == 403
+        read = await client.get("/api/lists", headers=evil)  # sent, but the browser will not let that site see it
+        assert not any(name.lower().startswith("access-control-") for name in read.headers)
         assert hub.store.describe() == []
 
     run(scenario, tmp_path)

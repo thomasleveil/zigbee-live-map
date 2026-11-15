@@ -149,7 +149,7 @@ The header decoder has no dependency beyond the standard library. Its output was
 
 - **Receive only.** The sniffer firmware cannot transmit, and this tool never sends anything on the radio.
 - **Headers only.** Everything after the NWK header is encrypted with your network key. The tool does not ask for the key and does not decrypt. It shows who talks to whom, when and how much, never what is said. Network commands are recognised by their shape and labelled "probable" when that is a deduction.
-- **Local only.** The server listens on `127.0.0.1`, and refuses requests coming from another website. The only outbound connection is the registry update, and only when you ask for it.
+- **Local only.** The server listens on `127.0.0.1` and answers only requests addressed to that local address. It grants no cross-origin access, so another website cannot read anything through your browser, and it refuses any change or live connection that does not come from its own page. The only outbound connection is the registry update, and only when you ask for it.
 - **Your data stays out of the repository.** Device lists live in your home directory, and `*.pcap` is in `.gitignore`. A capture contains your devices' addresses: think before sharing one.
 - Traffic of a neighbouring network on the same channel is recognised by its PAN id and kept off the map. Use this on networks you own or are allowed to monitor.
 
