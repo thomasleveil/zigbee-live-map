@@ -86,6 +86,10 @@ class Hub:
         known = set(self.store.merged()) | set(self.heard)
         return {ieee: org for ieee in known if (org := self.registry.lookup(ieee))}
 
+    def identified(self) -> dict[str, dict]:
+        """Heard devices whose identity was decrypted, by IEEE: what a list can be filled from."""
+        return {ieee: {"nwk": short, **self.identities[short]} for ieee, short in self.heard.items() if short in self.identities}
+
     def security_state(self) -> dict:
         return {"vulnerable": self.vulnerable, "secureJoinSeen": self.secure_join_seen,
                 "keyKnown": self.network_key is not None, "keySource": self.key_source,
@@ -366,7 +370,10 @@ async def api_lists(request: web.Request) -> web.Response:
     hub: Hub = request.app[HUB]
     named = set(hub.store.merged())
     heard = [{"ieee": ieee, "nwk": short} for ieee, short in sorted(hub.heard.items()) if ieee not in named]
-    return web.json_response({"lists": hub.store.describe(), "heard": heard, "vendors": hub.vendors(), "persistent": hub.store.dir is not None})
+    identified = hub.identified()
+    fillable = len(identified.keys() - hub.store.known())   # the page explains an empty fill from these three
+    return web.json_response({"lists": hub.store.describe(), "heard": heard, "vendors": hub.vendors(), "persistent": hub.store.dir is not None,
+                              "keyKnown": hub.network_key is not None, "identified": len(identified), "fillable": fillable})
 
 
 async def api_list_create(request: web.Request) -> web.Response:
@@ -403,6 +410,14 @@ async def api_device_delete(request: web.Request) -> web.Response:
     hub.store.delete_device(request.match_info["list"], request.match_info["ieee"])
     await hub.names_changed()
     return web.json_response({})
+
+
+async def api_fill(request: web.Request) -> web.Response:
+    hub: Hub = request.app[HUB]
+    added = hub.store.fill_from_identities(request.match_info["list"], hub.identified())
+    if added:
+        await hub.names_changed()
+    return web.json_response({"added": added})
 
 
 async def api_import(request: web.Request) -> web.Response:
@@ -506,7 +521,7 @@ def build_app(hub: Hub) -> web.Application:
         web.get("/api/lists", api_lists), web.post("/api/lists", api_list_create),
         web.patch("/api/lists/{list}", api_list_update), web.delete("/api/lists/{list}", api_list_delete),
         web.put("/api/lists/{list}/devices/{ieee}", api_device_set), web.delete("/api/lists/{list}/devices/{ieee}", api_device_delete),
-        web.post("/api/lists/{list}/import", api_import), web.get("/api/lists/{list}/export", api_export),
+        web.post("/api/lists/{list}/fill-identities", api_fill), web.post("/api/lists/{list}/import", api_import), web.get("/api/lists/{list}/export", api_export),
         web.get("/api/session", api_session), web.get("/api/vendors", api_vendors), web.post("/api/vendors/refresh", api_vendors_refresh),
         web.get("/api/keys", api_keys), web.put("/api/keys/{pan}", api_keys_set), web.delete("/api/keys/{pan}", api_keys_delete),
     ])

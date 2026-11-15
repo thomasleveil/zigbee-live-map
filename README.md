@@ -75,6 +75,7 @@ Names therefore come from you. They are kept in **lists of known devices**, on y
 
 - **Rename on the map**: click a device, type a name, save.
 - **Manage lists** on the *Known devices* page: create, rename and delete lists, edit devices, name the devices the sniffer has heard, import and export.
+- **Name devices from what they say about themselves**: once the network key is known (see *Settings*), the sniffer reads each device's model from its decrypted traffic. On the *Known devices* page, the button under *Heard on the air, not named yet* adds every such device that no list has yet to the list shown, named after its model, and puts the model in the Model column. It never touches a device that already has an entry, in any list, and it says why when there is nothing to add. Two devices of the same model get the last bytes of their IEEE address appended ("Smart plug 5956"), so they can be told apart and keep that name. This is most useful right after a device re-pairs, since devices rarely announce their model unprompted: it only works for devices heard announcing it since the tool started. Rename them afterwards to what they do.
 - **Import a list from your hub**: export or copy your device table to a CSV or tab-separated file with a header row, on the page or from the command line:
 
   ```sh

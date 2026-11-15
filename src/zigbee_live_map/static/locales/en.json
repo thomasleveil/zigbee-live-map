@@ -254,6 +254,12 @@
   "dev.heardNone": "Every device heard so far has a name.",
   "dev.nameIt": "Name for {ieee}",
   "dev.unknownVendor": "unknown",
+  "dev.fill": "Name them from their decrypted identity",
+  "dev.fillHelp": "{n} device(s) heard have a decrypted identity and no entry in any list. They are added to the list shown above, named after their model.",
+  "dev.fillNoKey": "Nothing to fill yet: the network key is not known, so the sniffer cannot read what devices say about themselves. Add the key in Settings.",
+  "dev.fillNoIdentity": "Nothing to fill yet: no device has announced its model since the key became known. Devices mostly do so when they join or re-pair. Reload this page to check again.",
+  "dev.fillAllNamed": "Nothing to fill: every device whose identity was read already has an entry in a list.",
+  "dev.filled": "{n} device(s) named from their decrypted identity.",
 
   "nav.security": "Security",
   "sec.title": "Security",

@@ -29,11 +29,6 @@ sniffing is one data source among several.
 - Package as a Home Assistant add-on: container + `config.yaml` manifest, and USB sniffer
   dongle passthrough. (Add-on specifics to verify at build time.)
 
-## Map / diagnostics
-
-- Button to fill a known-devices list from decrypted identity (most useful right after a
-  device re-pairs, since devices rarely announce their model unprompted).
-
 ## Active probing (parked)
 
 - Sending a frame to a device (ping, active role discovery) needs a **transmitting** radio;

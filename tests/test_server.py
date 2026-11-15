@@ -189,3 +189,120 @@ def test_identity_and_link_costs_are_read_once_a_key_is_known(tmp_path):
         assert hub.batteries["0x72f6"] == {"percent": 60}
 
     run(scenario, tmp_path)
+
+
+def _hear(hub, ieee, short, identity=None):
+    hub.heard[ieee] = short
+    if identity is not None:
+        hub.identities[short] = identity
+
+
+def test_fill_adds_every_identified_heard_device_with_its_model(tmp_path):
+    async def scenario(client, hub, origin):
+        hub.network_key = NET
+        basic = decode.zcl_basic_response("LUMI", "lumi.weather", power=3)
+        frame = decode.build_secured_nwk(NET, seq=5, pan=0x1A62, mac_dst=0x0000, mac_src=0x72F6,
+                                         nwk_dst=0x0000, nwk_src=0x72F6, radius=30, nwk_seq=5,
+                                         src64=DEV64, counter=42, payload=basic)
+        await hub.publish(frame, 1.0, None)   # read from the air, not planted
+        _hear(hub, "00:11:22:33:44:55:66:09", "0x0009")   # heard, but its identity was never decrypted
+        list_id = (await (await client.post("/api/lists", json={"name": "Home"}, headers=origin)).json())["id"]
+        ws = await client.ws_connect(f"/ws?token={origin['X-ZLM-Token']}", headers=origin)
+        for _ in range(3):
+            await ws.receive_json()   # hello, status, backlog
+        done = await client.post(f"/api/lists/{list_id}/fill-identities", headers=origin)
+        assert done.status == 200 and (await done.json()) == {"added": 1}
+        ieee = "00:15:8d:00:01:a2:b3:c4"
+        assert hub.store.lists[list_id]["devices"] == {ieee: {"name": "lumi.weather", "model": "lumi.weather", "nwk": "0x72f6"}}
+        update = await ws.receive_json()
+        assert update["type"] == "names" and update["names"][ieee]["name"] == "lumi.weather"
+        again = await client.post(f"/api/lists/{list_id}/fill-identities", headers=origin)
+        assert (await again.json()) == {"added": 0}
+        assert (await client.post("/api/lists/nope/fill-identities", headers=origin)).status == 400
+        await ws.close()
+
+    run(scenario, tmp_path)
+
+
+def test_fill_never_overwrites_or_duplicates_a_device_already_named(tmp_path):
+    async def scenario(client, hub, origin):
+        a, b, c = "00:11:22:33:44:55:66:0a", "00:11:22:33:44:55:66:0b", "00:11:22:33:44:55:66:0c"
+        for ieee, short in ((a, "0x000a"), (b, "0x000b"), (c, "0x000c")):
+            _hear(hub, ieee, short, {"manufacturer": "ACME", "model": f"model-{short}"})
+        home = (await (await client.post("/api/lists", json={"name": "Home"}, headers=origin)).json())["id"]
+        office = (await (await client.post("/api/lists", json={"name": "Office"}, headers=origin)).json())["id"]
+        hub.store.set_device(home, a, {"name": "Kitchen plug", "model": "mine"})
+        hub.store.set_device(office, b, {"name": "Desk lamp"})
+        hub.store.update(office, enabled=False)   # a switched-off list still counts as knowing the device
+        done = await client.post(f"/api/lists/{home}/fill-identities", headers=origin)
+        assert (await done.json()) == {"added": 1}
+        assert hub.store.lists[home]["devices"] == {a: {"name": "Kitchen plug", "model": "mine"},
+                                                     c: {"name": "model-0x000c", "model": "model-0x000c", "nwk": "0x000c"}}
+        assert hub.store.lists[office]["devices"] == {b: {"name": "Desk lamp"}}
+
+    run(scenario, tmp_path)
+
+
+def test_fill_gives_two_devices_of_one_model_distinct_and_stable_names(tmp_path):
+    async def scenario(client, hub, origin):
+        a, b, c = "00:11:22:33:44:55:aa:01", "00:11:22:33:44:55:bb:02", "00:11:22:33:44:55:cc:03"
+        plug = {"manufacturer": "ACME", "model": "Smart plug"}
+        _hear(hub, a, "0x0001", plug)
+        _hear(hub, b, "0x0002", plug)
+        _hear(hub, c, "0x0003", {"manufacturer": "ACME", "model": "Motion sensor"})
+        home = (await (await client.post("/api/lists", json={"name": "Home"}, headers=origin)).json())["id"]
+        await client.post(f"/api/lists/{home}/fill-identities", headers=origin)
+        names = {ieee: entry["name"] for ieee, entry in hub.store.lists[home]["devices"].items()}
+        assert names == {a: "Smart plug aa01", b: "Smart plug bb02", c: "Motion sensor"}
+        # Heard in the other order, in a fresh list: the same device gets the same name.
+        hub.heard.clear()
+        _hear(hub, b, "0x0002", plug)
+        _hear(hub, a, "0x0001", plug)
+        other = (await (await client.post("/api/lists", json={"name": "Other"}, headers=origin)).json())["id"]
+        hub.store.delete(home)
+        await client.post(f"/api/lists/{other}/fill-identities", headers=origin)
+        assert {ieee: e["name"] for ieee, e in hub.store.lists[other]["devices"].items()} == {a: "Smart plug aa01", b: "Smart plug bb02"}
+        # A third plug that turns up later is told apart from the two already named, which keep their names.
+        d = "00:11:22:33:44:55:dd:04"
+        _hear(hub, d, "0x0004", plug)
+        await client.post(f"/api/lists/{other}/fill-identities", headers=origin)
+        assert hub.store.lists[other]["devices"][d]["name"] == "Smart plug dd04"
+        assert hub.store.lists[other]["devices"][a]["name"] == "Smart plug aa01"
+
+    run(scenario, tmp_path)
+
+
+def test_fill_state_says_why_there_is_nothing_to_fill(tmp_path):
+    async def scenario(client, hub, origin):
+        a = "00:11:22:33:44:55:66:0a"
+        _hear(hub, a, "0x000a")
+        state = await (await client.get("/api/lists")).json()
+        assert state["keyKnown"] is False and state["identified"] == 0 and state["fillable"] == 0
+        hub.network_key = NET
+        state = await (await client.get("/api/lists")).json()
+        assert state["keyKnown"] is True and state["identified"] == 0 and state["fillable"] == 0
+        hub.identities["0x000a"] = {"manufacturer": "ACME", "model": "Smart plug"}
+        state = await (await client.get("/api/lists")).json()
+        assert state["identified"] == 1 and state["fillable"] == 1
+        home = (await (await client.post("/api/lists", json={"name": "Home"}, headers=origin)).json())["id"]
+        hub.store.set_device(home, a, {"name": "Kitchen plug"})
+        state = await (await client.get("/api/lists")).json()
+        assert state["identified"] == 1 and state["fillable"] == 0
+
+    run(scenario, tmp_path)
+
+
+def test_fill_is_guarded_like_every_other_change(tmp_path):
+    async def scenario(client, hub, origin):
+        _hear(hub, "00:11:22:33:44:55:66:0a", "0x000a", {"model": "Smart plug"})
+        home = (await (await client.post("/api/lists", json={"name": "Home"}, headers=origin)).json())["id"]
+        url, token = f"/api/lists/{home}/fill-identities", origin["X-ZLM-Token"]
+        assert (await client.post(url)).status == 403
+        assert (await client.post(url, headers={"X-ZLM-Token": "guess"})).status == 403
+        assert (await client.post(url, headers={"Origin": "http://evil.example", "X-ZLM-Token": token})).status == 403
+        assert (await client.post(url, headers={"Host": "evil.example", "X-ZLM-Token": token})).status == 403
+        assert hub.store.lists[home]["devices"] == {}
+        ok = await client.post(url, headers=origin)   # the same call from this tool's own page does work
+        assert ok.status == 200 and (await ok.json()) == {"added": 1}
+
+    run(scenario, tmp_path)

@@ -254,6 +254,12 @@
   "dev.heardNone": "Tous les appareils entendus jusqu'ici ont un nom.",
   "dev.nameIt": "Nom pour {ieee}",
   "dev.unknownVendor": "inconnu",
+  "dev.fill": "Les nommer d'après leur identité déchiffrée",
+  "dev.fillHelp": "{n} appareil(s) entendu(s) ont une identité déchiffrée et aucune entrée dans les listes. Ils sont ajoutés à la liste affichée au-dessus, nommés d'après leur modèle.",
+  "dev.fillNoKey": "Rien à remplir pour l'instant : la clé réseau n'est pas connue, donc le sniffer ne peut pas lire ce que les appareils disent d'eux-mêmes. Ajoute la clé dans les réglages.",
+  "dev.fillNoIdentity": "Rien à remplir pour l'instant : aucun appareil n'a annoncé son modèle depuis que la clé est connue. Ils le font surtout quand ils rejoignent le réseau ou sont ré-appairés. Recharge la page pour revérifier.",
+  "dev.fillAllNamed": "Rien à remplir : tous les appareils dont l'identité a été lue ont déjà une entrée dans une liste.",
+  "dev.filled": "{n} appareil(s) nommé(s) d'après leur identité déchiffrée.",
 
   "nav.security": "Sécurité",
   "sec.title": "Sécurité",

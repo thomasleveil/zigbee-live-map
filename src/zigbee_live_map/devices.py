@@ -222,6 +222,42 @@ class DeviceStore:
         self.lists[target]["devices"][ieee_n] = entry
         self._save(target)
 
+    def known(self) -> set[str]:
+        """Every IEEE address that has an entry in any list, switched on or not."""
+        return {ieee for data in self.lists.values() for ieee in data["devices"]}
+
+    def fill_from_identities(self, list_id: str, found: dict[str, dict]) -> int:
+        """Add the devices that no list knows yet, named after the model they announced (decrypted).
+
+        `found` maps IEEE -> {"nwk", "manufacturer", "model"}. A device that already has an entry
+        anywhere is left alone. The name is the model. When that name is taken, a device of that model
+        is already known, or another device in this batch shares it, each of them gets the last bytes
+        of its IEEE address appended ("Smart plug 5956"). That tail never changes for a device,
+        whereas a counter ("Smart plug 2") would depend on the order the radio heard them in.
+        """
+        data = self._get(list_id)
+        known = self.known()
+        new = {ieee: item for ieee, item in sorted(found.items()) if ieee not in known}
+        label = {ieee: " ".join(str(item.get("model") or item.get("manufacturer") or "Zigbee device").split())[:MAX_TEXT] for ieee, item in new.items()}
+        entries = [entry for lst in self.lists.values() for entry in lst["devices"].values()]
+        taken = {entry["name"].lower() for entry in entries if entry.get("name")}
+        models = {entry["model"].lower() for entry in entries if entry.get("model")}   # a known twin, whatever its name became
+        for ieee, item in new.items():
+            twins = sum(1 for other in label.values() if other.lower() == label[ieee].lower())
+            name = label[ieee]
+            if twins > 1 or name.lower() in taken or name.lower() in models:
+                digits = ieee.replace(":", "")
+                for width in range(4, 17, 2):   # two bytes, more only if those collide as well
+                    tail = f" {digits[-width:]}"
+                    name = f"{label[ieee][:MAX_TEXT - len(tail)].rstrip()}{tail}"
+                    if name.lower() not in taken:
+                        break
+            taken.add(name.lower())
+            data["devices"][ieee] = clean_entry({"name": name, "model": item.get("model"), "nwk": item.get("nwk")})
+        if new:
+            self._save(list_id)
+        return len(new)
+
     def import_text(self, list_id: str, text: str) -> int:
         data = self._get(list_id)
         _name, devices = parse_import(text)

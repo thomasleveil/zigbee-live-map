@@ -32,6 +32,8 @@ td input { width: 100%; min-width: 5.5rem; }
 td.mono { font-family: ui-monospace, Menlo, monospace; font-size: .85rem; white-space: nowrap; }
 td.actions { white-space: nowrap; }
 td.actions button { margin-right: .3rem; padding: .2rem .5rem; }
+.toolbar p { margin: 0; }
+button[aria-disabled="true"] { opacity: .6; cursor: default; }
 #flash { min-height: 1.5rem; margin: .6rem 0 0; }
 #flash.err { color: var(--bad); }
 input[type="file"] { max-width: 100%; }
@@ -94,6 +96,10 @@ input[type="file"] { max-width: 100%; }
       <section class="panel" id="heardPanel" hidden aria-labelledby="heardTitle">
         <h2 id="heardTitle" data-i18n="dev.heard"></h2>
         <p class="note" data-i18n="dev.heardHelp"></p>
+        <div class="toolbar">
+          <button type="button" id="fillBtn" aria-describedby="fillNote" data-i18n="dev.fill"></button>
+          <p class="note grow" id="fillNote" role="status"></p>
+        </div>
         <div class="tablewrap">
           <table>
             <thead><tr><th scope="col" data-i18n="dev.col.ieee"></th><th scope="col" data-i18n="dev.col.nwk"></th><th scope="col" data-i18n="dev.col.vendor"></th><th scope="col" data-i18n="dev.col.name"></th><th scope="col" data-i18n="dev.col.actions"></th></tr></thead>
@@ -163,6 +169,10 @@ function render() {
       rows.appendChild(tr);
     }
   }
+  const fill = $("fillBtn"), fillable = data.fillable || 0;
+  fill.setAttribute("aria-disabled", String(!fillable));   // stays focusable, so its reason is read with it
+  $("fillNote").textContent = !data.keyKnown ? t("dev.fillNoKey") : fillable ? t("dev.fillHelp", { n: fillable })
+    : data.identified ? t("dev.fillAllNamed") : t("dev.fillNoIdentity");
   $("heardPanel").hidden = !list; $("heardNone").hidden = data.heard.length > 0;
   const heard = $("heardRows"); heard.innerHTML = "";
   for (const h of list ? data.heard : []) {
@@ -182,6 +192,10 @@ $("newList").addEventListener("submit", async ev => {
   ev.preventDefault(); const name = $("newListName").value;
   const made = await call("POST", "/api/lists", { name });
   if (made) { current = made.id; $("newListName").value = ""; render(); }
+});
+$("fillBtn").addEventListener("click", ev => {
+  if (ev.currentTarget.getAttribute("aria-disabled") === "true") return;
+  call("POST", `/api/lists/${encodeURIComponent(current)}/fill-identities`, undefined, r => t("dev.filled", { n: r.added }));
 });
 $("renameList").addEventListener("click", () => call("PATCH", `/api/lists/${encodeURIComponent(current)}`, { name: $("listName").value }));
 $("listName").addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); $("renameList").click(); } });
