@@ -10,8 +10,17 @@ const ZLM = (() => {
   // Translators can mark **bold** and *italic*; nothing else in a translation is ever treated as HTML.
   const rich = s => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\*(.+?)\*/g, "<i>$1</i>");
   const emit = name => document.dispatchEvent(new CustomEvent(name));
-  async function getJson(url, options) {
-    const response = await fetch(url, { cache: "no-store", ...options });
+  // Changes and the live connection need the session token, which only a page of this tool can read.
+  let tokenPromise = null;
+  function token(fresh) {
+    if (fresh || !tokenPromise) tokenPromise = fetch("/api/session", { cache: "no-store" }).then(r => r.json()).then(d => d.token).catch(() => { tokenPromise = null; return ""; });
+    return tokenPromise;
+  }
+  async function getJson(url, options = {}) {
+    const changing = options.method && options.method !== "GET";
+    const send = async fresh => fetch(url, { cache: "no-store", ...options, headers: { ...options.headers, ...(changing ? { "X-ZLM-Token": await token(fresh) } : {}) } });
+    let response = await send(false);
+    if (response.status === 403 && changing) response = await send(true);   // the tool was restarted: its token changed
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || `${response.status}`);
     return data;
@@ -114,5 +123,5 @@ const ZLM = (() => {
     strings = reference;
     await applyLang();
   }
-  return { init, t, has, esc, rich, translate, prefs, getJson, openSettings, setExtras(fn) { extras = fn; }, get lang() { return lang; } };
+  return { init, t, has, esc, rich, translate, prefs, getJson, token, openSettings, setExtras(fn) { extras = fn; }, get lang() { return lang; } };
 })();

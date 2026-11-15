@@ -5,22 +5,28 @@ read your radio traffic or edit your device lists. Three rules do that:
 
 - every request must be addressed to the local host name, which stops DNS rebinding;
 - plain reads (GET) are answered without any cross-origin permission, so the browser itself keeps
-  another site from seeing the answer. They are not filtered on Origin: browsers and extensions
-  attach that header to ordinary page resources in ways that cannot be predicted;
-- the live connection and every change must carry the Origin of this tool's own page.
+  another site from seeing the answer;
+- the live connection and every change must carry a token that is drawn at start-up and handed out
+  by a plain read, which therefore only this tool's own page can obtain.
+
+The Origin header is not compared to an exact value: browsers and extensions rewrite it in ways
+that cannot be predicted (some drop the port). When present it must still name the local host.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import re
+import secrets
 import sys
 import threading
 import time
 from collections import deque
 from importlib import resources
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from aiohttp import WSMsgType, web
 
@@ -205,6 +211,8 @@ async def pump(queue: asyncio.Queue, hub: Hub) -> None:
 # ------------------------------------------------------------------------------------------ HTTP
 
 HUB = web.AppKey("hub", Hub)
+TOKEN = web.AppKey("token", str)
+LOCAL_NAMES = {"127.0.0.1", "localhost"}
 
 @web.middleware
 async def local_only(request: web.Request, handler):
@@ -212,11 +220,14 @@ async def local_only(request: web.Request, handler):
     hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
     origin = request.headers.get("Origin")
     guarded = request.method not in ("GET", "HEAD") or request.path == "/ws"
+    token = request.headers.get("X-ZLM-Token") or request.query.get("token") or ""
     reason = None
     if request.host not in hosts:
         reason = "it is not addressed to this local server"
-    elif guarded and origin not in {f"http://{h}" for h in hosts}:
-        reason = "it does not come from this tool's own page"
+    elif guarded and origin is not None and urlsplit(origin).hostname not in LOCAL_NAMES:
+        reason = "it comes from another site"
+    elif guarded and not hmac.compare_digest(token, request.app[TOKEN]):
+        reason = "it does not carry this session's token (reload the page)"
     if reason:
         print(f"refused {request.method} {request.path}: {reason} (Host: {request.host}, Origin: {origin})", file=sys.stderr, flush=True)
         raise web.HTTPForbidden(text=f"zigbee-live-map refused this request: {reason}.")
@@ -324,6 +335,10 @@ async def api_export(request: web.Request) -> web.Response:
     return web.Response(text=text, content_type=kind, charset="utf-8", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+async def api_session(request: web.Request) -> web.Response:
+    return web.json_response({"token": request.app[TOKEN]}, headers={"Cache-Control": "no-store"})
+
+
 async def api_vendors(request: web.Request) -> web.Response:
     return web.json_response(request.app[HUB].registry.meta)
 
@@ -366,6 +381,7 @@ async def handle_ws(request: web.Request) -> web.StreamResponse:
 def build_app(hub: Hub) -> web.Application:
     app = web.Application(middlewares=[local_only], client_max_size=2 * 1024 * 1024)
     app[HUB] = hub
+    app[TOKEN] = secrets.token_urlsafe(24)
     app.add_routes([
         web.get("/", handle_page), web.get("/devices", handle_page), web.get("/ws", handle_ws),
         web.get("/static/{name}", handle_static), web.get("/locales", handle_locales), web.get("/locales/{code}.json", handle_locale),
@@ -373,7 +389,7 @@ def build_app(hub: Hub) -> web.Application:
         web.patch("/api/lists/{list}", api_list_update), web.delete("/api/lists/{list}", api_list_delete),
         web.put("/api/lists/{list}/devices/{ieee}", api_device_set), web.delete("/api/lists/{list}/devices/{ieee}", api_device_delete),
         web.post("/api/lists/{list}/import", api_import), web.get("/api/lists/{list}/export", api_export),
-        web.get("/api/vendors", api_vendors), web.post("/api/vendors/refresh", api_vendors_refresh),
+        web.get("/api/session", api_session), web.get("/api/vendors", api_vendors), web.post("/api/vendors/refresh", api_vendors_refresh),
     ])
     return app
 
