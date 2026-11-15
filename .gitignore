@@ -1,0 +1,15 @@
+# Your own network: device names and captures never belong in the repository.
+names.json
+*.pcap
+*.pcapng
+
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+uv.lock
+.DS_Store
+.playwright-mcp/
