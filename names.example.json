@@ -1,0 +1,5 @@
+{
+  "00:11:22:33:44:55:66:01": {"name": "Coordinator", "model": "USB stick"},
+  "00:11:22:33:44:55:66:02": {"name": "Kitchen plug", "model": "Smart plug", "nwk": "0x1a2b"},
+  "00:11:22:33:44:55:66:03": {"name": "Bedroom thermostat"}
+}
