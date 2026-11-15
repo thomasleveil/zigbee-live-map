@@ -32,6 +32,10 @@ END_DEVICES = {
     "0x7c07": ("Front door", "Contact sensor", COORDINATOR, -55),
 }
 NO_CHILDREN = {"0x2b04"}  # this router advertises that it accepts no child
+# Two deliberate faults, so that the diagnostics have something to show:
+WEAK_LINKS = {frozenset(("0x7c05", "0x2b03")): 0.22}  # share of frames that need a second attempt
+SLOW_RELAYS = {"0x2b03": (0.12, 0.26)}  # seconds a router takes to pass a frame on
+RELAY_TIME = (0.008, 0.02)
 
 
 def ieee_of(addr: str) -> str:
@@ -67,6 +71,9 @@ class DemoNetwork:
     async def _send(self, src: str, frame: bytes, seq: int, acked_by: str | None) -> None:
         async with self.air:
             await self.emit(frame, self.rssi[src] + random.randint(-3, 3))
+            if acked_by and random.random() < WEAK_LINKS.get(frozenset((src, acked_by)), 0):
+                await asyncio.sleep(0.006)  # no acknowledgement came back: same bytes again
+                await self.emit(frame, self.rssi[src] + random.randint(-3, 3))
             if acked_by:
                 await asyncio.sleep(0.004)
                 await self.emit(zf.build_ack(seq), self.rssi[acked_by] + random.randint(-3, 3))
@@ -76,6 +83,9 @@ class DemoNetwork:
         frame = zf.build_nwk(seq, PAN, dst, src, command=command, nwk_dst=ndst, nwk_src=nsrc, radius=radius,
                              nwk_seq=nseq, hop_ieee=ieee_of(src), payload_len=size)
         await self._send(src, frame, seq, None if dst == "0xffff" else dst)
+
+    async def relay_pause(self, router: str) -> None:
+        await asyncio.sleep(random.uniform(*SLOW_RELAYS.get(router, RELAY_TIME)))
 
     def path_up(self, addr: str) -> list[str]:
         path = [addr]
@@ -88,7 +98,7 @@ class DemoNetwork:
         for i in range(len(path) - 1):
             await self.hop(path[i], path[i + 1], command=command, nsrc=src, ndst=COORDINATOR, radius=30 - i, nseq=nseq,
                            size=size + (2 * i if command else 0))
-            await self.sleep(0.03)
+            await self.relay_pause(path[i + 1])
 
     async def from_coordinator(self, dst: str) -> None:
         path, nseq = list(reversed(self.path_up(dst))), self._next(self.nwk_seq, COORDINATOR)
@@ -98,7 +108,7 @@ class DemoNetwork:
                 self.pending[dst].append((path[i], nseq, 30 - i))
                 return
             await self.hop(path[i], path[i + 1], command=False, nsrc=COORDINATOR, ndst=dst, radius=30 - i, nseq=nseq)
-            await self.sleep(0.03)
+            await self.relay_pause(path[i + 1])
 
     async def flood(self, *, command: bool, ndst: str, radius: int) -> None:
         """A broadcast from the coordinator, repeated once by every router, radius shrinking per hop."""
