@@ -30,9 +30,10 @@ from urllib.parse import urlsplit
 
 from aiohttp import WSMsgType, web
 
-from . import __version__, decode, demo
+from . import __version__, crypto, decode, demo, keys as keystore
 from .devices import DeviceError, DeviceStore
 from .frames import Classifier, read_pcap
+from .keys import KeyStore
 from .vendors import Registry, VendorError
 
 STATIC_TYPES = {".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".json": "application/json"}
@@ -60,8 +61,9 @@ def list_locales() -> list[dict]:
 class Hub:
     """Keeps the recent events and fans every new one out to the connected pages."""
 
-    def __init__(self, store: DeviceStore, registry: Registry, info: dict, backlog: int) -> None:
+    def __init__(self, store: DeviceStore, registry: Registry, info: dict, backlog: int, keys: KeyStore | None = None) -> None:
         self.store, self.registry, self.info = store, registry, info
+        self.keys = keys if keys is not None else KeyStore(None)
         self.status = {"type": "status", "sniffer": "starting", "detail": ""}
         self.events: deque = deque(maxlen=backlog)
         self.clients: set[web.WebSocketResponse] = set()
@@ -76,6 +78,8 @@ class Hub:
         self.secure_join_seen = False             # a join was secured with a non-default link key
         self.identities: dict[str, dict] = {}     # NWK short address -> {manufacturer, model, power}
         self.link_quality: dict[str, list] = {}   # router NWK short address -> per-neighbour costs
+        self.pan: str | None = None               # the dominant PAN heard, used to pick a saved key
+        self._pan_counts: dict[str, int] = {}
 
     def vendors(self) -> dict[str, str]:
         known = set(self.store.merged()) | set(self.heard)
@@ -84,7 +88,16 @@ class Hub:
     def security_state(self) -> dict:
         return {"vulnerable": self.vulnerable, "secureJoinSeen": self.secure_join_seen,
                 "keyKnown": self.network_key is not None, "keySource": self.key_source,
-                "key": self.network_key.hex() if self.network_key else None}
+                "key": self.network_key.hex() if self.network_key else None, "pan": self.pan}
+
+    async def _apply_saved_key(self) -> None:
+        """When the live PAN has a key saved from a previous session, decrypt with it automatically."""
+        saved = self.keys.get(self.pan)
+        if saved and saved != self.network_key and self.key_source in (None, "saved"):
+            self.network_key, self.key_source = saved, "saved"
+            self.identities.clear()
+            self.link_quality.clear()
+            await self.send_security()
 
     async def send_security(self) -> None:
         await self.send_all({"type": "security", **self.security_state()})
@@ -105,6 +118,12 @@ class Hub:
     async def publish(self, frame: bytes, ts: float, rssi: int | None) -> None:
         event = self.classifier.event(frame, ts, rssi)
         self.events.append(event)
+        pan = event.get("pan")
+        if pan and pan != "0xffff":
+            self._pan_counts[pan] = self._pan_counts.get(pan, 0) + 1
+            if pan != self.pan and self._pan_counts[pan] >= self._pan_counts.get(self.pan, 0):
+                self.pan = pan
+                await self._apply_saved_key()
         ieee, short = event.get("ieee"), event.get("ms")
         if ieee and short and self.heard.get(ieee) != short:
             self.heard[ieee] = short
@@ -158,12 +177,13 @@ class Hub:
         self.events.clear()
         self.heard.clear()
         self.classifier = Classifier()
-        # A new channel is a new network: drop the per-network security verdict and a key we recovered here.
+        # A new channel is a new network: drop the per-network verdict, key and PAN; a saved key re-applies per PAN.
         self.vulnerable = self.secure_join_seen = False
         self.identities.clear()
         self.link_quality.clear()
-        if self.key_source == "recovered":
-            self.network_key = self.key_source = None
+        self.pan = None
+        self._pan_counts.clear()
+        self.network_key = self.key_source = None
         self.source.set_channel(channel, self.generation)
         await self.send_all(self.hello())
         await self.set_status("starting")
@@ -392,29 +412,37 @@ async def api_session(request: web.Request) -> web.Response:
     return web.json_response({"token": request.app[TOKEN]}, headers={"Cache-Control": "no-store"})
 
 
-async def api_network_key(request: web.Request) -> web.Response:
+async def api_keys(request: web.Request) -> web.Response:
     hub: Hub = request.app[HUB]
-    raw = str((await _json(request)).get("key", "")).strip().replace(":", "").replace(" ", "")
-    try:
-        key = bytes.fromhex(raw)
-    except ValueError:
-        raise DeviceError("the network key must be hexadecimal") from None
-    if len(key) != 16:
-        raise DeviceError("the network key must be 16 bytes (32 hexadecimal characters)")
-    hub.network_key, hub.key_source = key, "entered"
-    hub.identities.clear()
-    hub.link_quality.clear()
-    await hub.send_security()
-    return web.json_response(hub.security_state())
+    return web.json_response({"keys": hub.keys.describe(), "pan": hub.pan})
 
 
-async def api_network_key_clear(request: web.Request) -> web.Response:
+async def api_keys_set(request: web.Request) -> web.Response:
     hub: Hub = request.app[HUB]
-    hub.network_key = hub.key_source = None
-    hub.identities.clear()
-    hub.link_quality.clear()
-    await hub.send_security()
-    return web.json_response(hub.security_state())
+    data = await _json(request)
+    key = keystore.normalise_key(data.get("key", ""))
+    name = crypto.link_key_name(key)
+    if name:
+        raise DeviceError(f"that is {name}, a link key, not a network key")
+    pan = hub.keys.set(request.match_info["pan"], key.hex(), data.get("label", ""))
+    if pan == (hub.pan or ""):   # a key for the network on the air now: start decrypting with it
+        hub.network_key, hub.key_source = key, "saved"
+        hub.identities.clear()
+        hub.link_quality.clear()
+        await hub.send_security()
+    return web.json_response({"keys": hub.keys.describe(), "pan": hub.pan, "security": hub.security_state()})
+
+
+async def api_keys_delete(request: web.Request) -> web.Response:
+    hub: Hub = request.app[HUB]
+    pan = keystore.normalise_pan(request.match_info["pan"])
+    hub.keys.delete(pan)
+    if pan == (hub.pan or "") and hub.key_source == "saved":
+        hub.network_key = hub.key_source = None
+        hub.identities.clear()
+        hub.link_quality.clear()
+        await hub.send_security()
+    return web.json_response({"keys": hub.keys.describe(), "pan": hub.pan, "security": hub.security_state()})
 
 
 async def api_vendors(request: web.Request) -> web.Response:
@@ -468,7 +496,7 @@ def build_app(hub: Hub) -> web.Application:
         web.put("/api/lists/{list}/devices/{ieee}", api_device_set), web.delete("/api/lists/{list}/devices/{ieee}", api_device_delete),
         web.post("/api/lists/{list}/import", api_import), web.get("/api/lists/{list}/export", api_export),
         web.get("/api/session", api_session), web.get("/api/vendors", api_vendors), web.post("/api/vendors/refresh", api_vendors_refresh),
-        web.put("/api/network-key", api_network_key), web.delete("/api/network-key", api_network_key_clear),
+        web.get("/api/keys", api_keys), web.put("/api/keys/{pan}", api_keys_set), web.delete("/api/keys/{pan}", api_keys_delete),
     ])
     return app
 
@@ -484,7 +512,7 @@ async def serve(args) -> None:
     data_dir = Path(args.data_dir).expanduser()
     store = demo_store() if mode == "demo" else DeviceStore(data_dir)
     info = {"channel": args.channel if mode == "live" else None, "mode": mode, "focus": args.focus, "can_tune": mode == "live"}
-    hub = Hub(store, Registry(data_dir), info, args.backlog)
+    hub = Hub(store, Registry(data_dir), info, args.backlog, keys=KeyStore(None if mode == "demo" else data_dir))
     queue: asyncio.Queue = asyncio.Queue()
     tasks = [asyncio.create_task(pump(queue, hub))]
     if mode == "demo":

@@ -117,17 +117,30 @@ def test_map_pages_learn_names_and_chip_makers_over_the_websocket(tmp_path):
     run(scenario, tmp_path)
 
 
-def test_network_key_endpoint_validates_sets_and_clears(tmp_path):
+def test_network_keys_are_saved_listed_guarded_and_deleted(tmp_path):
     async def scenario(client, hub, origin):
-        assert (await client.put("/api/network-key", json={"key": "not hex"}, headers=origin)).status == 400
-        assert (await client.put("/api/network-key", json={"key": "0011"}, headers=origin)).status == 400  # too short
-        assert (await client.put("/api/network-key", json={"key": NET.hex()})).status == 403  # no token: not our page
-        ok = await client.put("/api/network-key", json={"key": NET.hex()}, headers=origin)
-        state = await ok.json()
-        assert state["keyKnown"] and state["keySource"] == "entered" and state["key"] == NET.hex()
-        assert hub.network_key == NET
-        cleared = await (await client.delete("/api/network-key", headers=origin)).json()
-        assert cleared["keyKnown"] is False and hub.network_key is None
+        assert (await client.put("/api/keys/0x1a62", json={"key": "nothex"}, headers=origin)).status == 400
+        link = await client.put("/api/keys/0x1a62", json={"key": crypto.DEFAULT_TC_LINK_KEY.hex()}, headers=origin)
+        assert link.status == 400 and "link key" in (await link.json())["error"]   # a link key is refused
+        assert (await client.put("/api/keys/0x1a62", json={"key": NET.hex()})).status == 403  # no token: not our page
+        ok = await client.put("/api/keys/0x1a62", json={"key": NET.hex(), "label": "Home"}, headers=origin)
+        assert (await ok.json())["keys"] == [{"pan": "0x1a62", "label": "Home", "key": NET.hex()}]
+        assert hub.keys.get("0x1a62") == NET
+        assert (await (await client.get("/api/keys")).json())["keys"][0]["pan"] == "0x1a62"
+        gone = await (await client.delete("/api/keys/0x1a62", headers=origin)).json()
+        assert gone["keys"] == [] and hub.keys.get("0x1a62") is None
+
+    run(scenario, tmp_path)
+
+
+def test_a_saved_key_auto_applies_when_its_network_is_heard(tmp_path):
+    async def scenario(client, hub, origin):
+        hub.keys.set("0x1a62", NET.hex(), "Home")
+        frame = decode.build_link_status(NET, pan=0x1A62, src=0x6CA5, src64=DEV64, counter=1, neighbours=[(0x0000, 1, 1)])
+        await hub.publish(frame, 1.0, None)
+        assert hub.pan == "0x1a62"
+        assert hub.network_key == NET and hub.key_source == "saved"
+        assert hub.link_quality["0x6ca5"] == [{"addr": "0x0000", "incoming": 1, "outgoing": 1}]
 
     run(scenario, tmp_path)
 

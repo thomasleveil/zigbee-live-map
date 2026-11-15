@@ -23,6 +23,17 @@ ZLL_MASTER_KEY = bytes.fromhex("9f5595f10257c8a469cbf42bc93fee31")       # leake
 SECURITY_LEVEL = 5   # ENC-MIC-32: AES encryption + 32-bit MIC, the level Zigbee secures with
 MIC_LEN = 4
 
+# Public link keys, so the tool can tell a user who pastes one that it is not a network key.
+KNOWN_LINK_KEYS = {
+    DEFAULT_TC_LINK_KEY: "the default Trust Center link key (ZigBeeAlliance09)",
+    ZLL_MASTER_KEY: "the Touchlink (ZLL) master key",
+}
+
+
+def link_key_name(key: bytes) -> str | None:
+    """If these bytes are a well-known link key (not a network key), say which one."""
+    return KNOWN_LINK_KEYS.get(bytes(key))
+
 
 def aes_ecb(key: bytes, block: bytes) -> bytes:
     enc = Cipher(algorithms.AES(key), modes.ECB()).encryptor()  # noqa: S305 - ECB is the raw block primitive for CCM*/MMO

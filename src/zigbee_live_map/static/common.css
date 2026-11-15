@@ -53,3 +53,16 @@ dialog.settings::backdrop { background: rgba(2, 4, 10, .6); }
 .settings p { margin: .5rem 0 0; }
 .settings .row { display: flex; flex-wrap: wrap; gap: .4rem 1.2rem; align-items: center; }
 .settings label.opt { display: inline-flex; align-items: center; gap: .4rem; cursor: pointer; }
+
+/* Network key management (settings dialog, both pages) */
+.keylist { display: grid; gap: .4rem; margin: .5rem 0; }
+.keylist .krow { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .6rem; border: 1px solid var(--line); border-radius: 6px; padding: .4rem .6rem; background: var(--panel2); }
+.keylist .kpan { font-family: ui-monospace, Menlo, monospace; font-weight: 700; }
+.keylist .klabel { flex: 1; color: var(--muted); }
+.keylist .kval { font-family: ui-monospace, Menlo, monospace; font-size: .85rem; color: var(--muted); word-break: break-all; width: 100%; }
+.keyform { display: grid; grid-template-columns: 1fr 1fr auto; gap: .4rem; align-items: end; }
+.keyform label { display: grid; gap: .15rem; font-size: .9rem; color: var(--muted); }
+.keyform input { font-family: ui-monospace, Menlo, monospace; width: 100%; }
+.keyform .wide { grid-column: 1 / -1; }
+.keyform button { align-self: end; }
+@media (max-width: 480px) { .keyform { grid-template-columns: 1fr; } }

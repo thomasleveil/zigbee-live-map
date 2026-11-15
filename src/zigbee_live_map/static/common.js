@@ -80,6 +80,15 @@ const ZLM = (() => {
         <section><label class="lead" for="zlmLang" data-i18n="settings.language"></label><select id="zlmLang"></select><p class="note" data-i18n="settings.translate"></p></section>
         <section role="radiogroup" aria-labelledby="zlmThemeTitle"><h3 id="zlmThemeTitle" data-i18n="settings.theme"></h3><div class="row" id="zlmTheme"></div></section>
         <section id="zlmExtras" hidden></section>
+        <section><h3 data-i18n="keys.title"></h3><p class="note" data-i18n="keys.help"></p>
+          <div class="keylist" id="zlmKeyList"></div>
+          <form class="keyform" id="zlmKeyForm">
+            <label class="wide"><span data-i18n="keys.key"></span><input id="zlmKeyVal" type="text" autocomplete="off" spellcheck="false" placeholder="aabbcc… (32)" maxlength="47"></label>
+            <label><span data-i18n="keys.pan"></span><input id="zlmKeyPan" type="text" autocomplete="off" spellcheck="false" placeholder="0x1a62" maxlength="6"></label>
+            <label><span data-i18n="keys.label"></span><input id="zlmKeyLabel" type="text" autocomplete="off" maxlength="60"></label>
+            <button type="submit" data-i18n="keys.add"></button>
+          </form>
+          <p class="note" id="zlmKeyMsg" role="status"></p></section>
         <section><h3 data-i18n="settings.vendors"></h3><p id="zlmVendorStatus" role="status"></p>
           <p><button type="button" id="zlmVendorRefresh" data-i18n="settings.vendors.refresh"></button></p><p class="note" data-i18n="settings.vendors.help"></p></section>
         <section><h3 data-i18n="settings.devices"></h3><p class="note" data-i18n="settings.devices.help"></p><p><a class="btn" href="/devices" data-i18n="settings.devices.open"></a></p></section>
@@ -98,7 +107,25 @@ const ZLM = (() => {
       catch (err) { status.textContent = t("settings.vendors.failed", { error: err.message }); }
       button.disabled = false;
     });
+    q("zlmKeyForm").addEventListener("submit", async ev => {
+      ev.preventDefault();
+      const pan = q("zlmKeyPan").value.trim(), key = q("zlmKeyVal").value.trim(), label = q("zlmKeyLabel").value.trim();
+      try {
+        const res = await getJson(`/api/keys/${encodeURIComponent(pan)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key, label }) });
+        renderKeys(res.keys, res.pan); q("zlmKeyVal").value = ""; q("zlmKeyLabel").value = ""; q("zlmKeyMsg").textContent = t("keys.saved");
+      } catch (err) { q("zlmKeyMsg").textContent = t("keys.failed", { error: err.message }); }
+    });
     if (extras) { q("zlmExtras").hidden = false; extras(q("zlmExtras")); }
+  }
+  function renderKeys(list, currentPan) {
+    const box = dialog.querySelector("#zlmKeyList"), panInput = dialog.querySelector("#zlmKeyPan");
+    if (currentPan && !panInput.value) panInput.value = currentPan;
+    if (!list || !list.length) { box.innerHTML = `<p class="note">${esc(t("keys.none"))}</p>`; return; }
+    box.innerHTML = list.map(k => `<div class="krow"><span class="kpan">${esc(k.pan)}</span><span class="klabel">${esc(k.label || "")}</span><button type="button" data-pan="${esc(k.pan)}" data-i18n="keys.remove"></button><span class="kval">${esc(k.key)}</span></div>`).join("");
+    translate(box);
+    for (const b of box.querySelectorAll("button[data-pan]")) b.addEventListener("click", async () => {
+      try { const res = await getJson(`/api/keys/${encodeURIComponent(b.dataset.pan)}`, { method: "DELETE" }); renderKeys(res.keys, res.pan); } catch (_) {}
+    });
   }
   function showVendors(meta, prefix = "") {
     dialog.querySelector("#zlmVendorStatus").textContent = prefix + t("settings.vendors.status", { entries: meta.entries, date: meta.date || "?", origin: t("settings.vendors.origin." + meta.origin) });
@@ -114,6 +141,7 @@ const ZLM = (() => {
   async function openSettings() {
     if (!dialog) buildSettings();
     fillSettings(); dialog.showModal();
+    try { const d = await getJson("/api/keys"); renderKeys(d.keys, d.pan); } catch (_) {}
     try { showVendors(await getJson("/api/vendors")); } catch (_) {}
   }
   document.addEventListener("zlm:lang", () => { if (dialog) fillSettings(); });

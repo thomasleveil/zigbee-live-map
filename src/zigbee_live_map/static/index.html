@@ -702,15 +702,9 @@ function buildSecurity() {
         <ol class="wizard" id="secWizard"></ol>
       </section>
       <section>
-        <h3 data-i18n="sec.key.title"></h3>
-        <p class="note" data-i18n="sec.key.help"></p>
-        <p id="secKeyStatus" role="status"></p>
-        <form class="keyform" id="secKeyForm">
-          <label for="secKeyInput"><span data-i18n="sec.key.label"></span>
-            <input id="secKeyInput" type="text" inputmode="latin" autocomplete="off" spellcheck="false" maxlength="47" placeholder="aabbcc…"></label>
-          <button type="submit" data-i18n="sec.key.save"></button>
-          <button type="button" id="secKeyClear" data-i18n="sec.key.clear"></button>
-        </form>
+        <h3 data-i18n="sec.save.title"></h3>
+        <p class="note" data-i18n="sec.save.help"></p>
+        <p><button type="button" id="secSaveKey"></button></p>
         <p class="note" id="secKeyMsg" role="status"></p>
       </section>
     </div>`;
@@ -718,15 +712,10 @@ function buildSecurity() {
   secDialog.querySelector("#secClose").addEventListener("click", () => secDialog.close());
   secDialog.addEventListener("click", ev => { if (ev.target === secDialog) secDialog.close(); });
   secDialog.querySelector("#secWizard").innerHTML = numberedList("sec.step").map(s => `<li>${rich(s)}</li>`).join("");
-  secDialog.querySelector("#secKeyForm").addEventListener("submit", async ev => {
-    ev.preventDefault();
-    const input = secDialog.querySelector("#secKeyInput");
-    try { S.security = await ZLM.getJson("/api/network-key", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: input.value }) }); secKeyMsg = t("sec.key.set"); input.value = ""; }
-    catch (err) { secKeyMsg = t("sec.key.bad", { error: err.message }); }
-    renderSecurity();
-  });
-  secDialog.querySelector("#secKeyClear").addEventListener("click", async () => {
-    try { S.security = await ZLM.getJson("/api/network-key", { method: "DELETE" }); secKeyMsg = t("sec.key.cleared"); }
+  secDialog.querySelector("#secSaveKey").addEventListener("click", async () => {
+    const s = S.security || {};
+    if (!s.key || !s.pan) return;
+    try { const res = await ZLM.getJson(`/api/keys/${encodeURIComponent(s.pan)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: s.key, label: "" }) }); S.security = res.security; secKeyMsg = t("sec.save.done", { pan: s.pan }); }
     catch (err) { secKeyMsg = t("sec.key.bad", { error: err.message }); }
     renderSecurity();
   });
@@ -742,8 +731,9 @@ function renderSecurity() {
   if (s.vulnerable) { cls = "vuln"; html = `<b>${esc(t("sec.verdict.vuln"))}</b><p>${rich(t("sec.verdict.vulnBody"))}</p>`; if (s.key) html += `<span class="keyval">${esc(s.key)}</span>`; }
   else if (s.secureJoinSeen) { cls = "safe"; html = `<b>${esc(t("sec.verdict.safe"))}</b><p>${rich(t("sec.verdict.safeBody"))}</p>`; }
   box.className = "secbox " + cls; box.innerHTML = html;
-  const ks = secDialog.querySelector("#secKeyStatus");
-  ks.textContent = s.keyKnown ? t(s.keySource === "recovered" ? "sec.key.recovered" : "sec.key.entered") : t("sec.key.none");
+  const save = secDialog.querySelector("#secSaveKey");
+  save.closest("section").hidden = !(s.vulnerable && s.key && s.pan);
+  save.textContent = t("sec.save.button", { pan: s.pan || "" });
   secDialog.querySelector("#secKeyMsg").textContent = secKeyMsg;
 }
 $("btnSecurity").addEventListener("click", () => { if (!secDialog) buildSecurity(); secKeyMsg = ""; renderSecurity(); secDialog.showModal(); });
