@@ -81,6 +81,22 @@
   .side { height: 80vh; border-top: 1px solid var(--line); } .hint { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .pill.live i, #log li.fresh { animation: none; } }
+
+#btnSecurity.vuln { color: var(--bad); border-color: var(--bad); font-weight: 700; }
+.secbox { border-left: 4px solid var(--line); background: var(--panel2); padding: .6rem .8rem; border-radius: 0 6px 6px 0; }
+.secbox.vuln { border-left-color: var(--bad); }
+.secbox.safe { border-left-color: var(--ok); }
+.secbox.wait { border-left-color: var(--warn); }
+.secbox b { font-size: 1.05rem; }
+.secbox .keyval { font-family: ui-monospace, Menlo, monospace; font-size: .95rem; word-break: break-all; display: block; margin-top: .4rem; padding: .35rem .5rem; background: var(--panel); border: 1px solid var(--line); border-radius: 5px; }
+.wizard { margin: .3rem 0 0; padding-left: 1.3rem; } .wizard li { margin: .25rem 0; }
+.keyform { display: flex; gap: .4rem; flex-wrap: wrap; align-items: end; margin-top: .4rem; }
+.keyform label { flex: 1; display: grid; gap: .15rem; font-size: .9rem; color: var(--muted); min-width: 14rem; }
+.keyform input { font-family: ui-monospace, Menlo, monospace; }
+#card .ident { border-left: 3px solid var(--accent); padding-left: .5rem; margin: .4rem 0; }
+#card .costs { list-style: none; margin: .2rem 0 .5rem; padding: 0; font-family: ui-monospace, Menlo, monospace; font-size: .9rem; }
+#card .costs li { display: flex; justify-content: space-between; gap: 1rem; }
+#card .costs .hi { color: var(--bad); font-weight: 700; }
 </style>
 </head>
 <body>
@@ -96,6 +112,7 @@
   <span class="verdict" id="verdict" role="status" hidden></span>
   <span class="grow"></span>
   <a class="btn" href="/devices" data-i18n="nav.devices"></a>
+  <button type="button" id="btnSecurity" data-i18n="nav.security"></button>
   <button type="button" id="btnSettings" data-i18n="nav.settings"></button>
 </header>
 
@@ -159,11 +176,12 @@ const catLearn = c => t(`cat.${ZLM.has(`cat.${c}.learn`) ? c : "other"}.learn`);
 // ------------------------------------------------------------------ state
 let S, pal, sel = null, frozen = false, animOn = !RM && prefs.get("anim", "on") !== "off", ws = null, connOpen = false, sniffer = { sniffer: "starting", detail: "" }, pending = 0;
 const hidden = new Set(["ack"]), parts = [], rings = [];
-const dirty = { devices: true, card: true, legend: true };
+const dirty = { devices: true, card: true, legend: true, security: true };
 const newFocus = () => ({ polls: 0, relayed: 0, rebroadcast: 0, beacon: null, joins: [] });
 function reset() {
   S = { pans: {}, hint: new Map(), nodes: new Map(), links: new Map(), pairs: new Map(), waiting: new Map(), lastHandover: null, sweptAt: 0, ghostsAt: 0, events: [], counts: {},
-        ieee2addr: new Map(), names: {}, vendors: {}, focusIeee: null, focusAddr: null, total: 0, recent: [], pan: null, mode: "live", channel: null, canTune: false, focus: newFocus() };
+        ieee2addr: new Map(), names: {}, vendors: {}, focusIeee: null, focusAddr: null, total: 0, recent: [], pan: null, mode: "live", channel: null, canTune: false, focus: newFocus(),
+        security: { vulnerable: false, secureJoinSeen: false, keyKnown: false, keySource: null, key: null }, identities: {}, costs: {} };
   parts.length = 0; rings.length = 0;
 }
 reset();
@@ -561,8 +579,10 @@ function renderCard() {
   const n = S.nodes.get(sel), meta = (n.ieee && S.names[n.ieee]) || {}, rl = role(n);
   const kids = [...S.nodes.values()].filter(k => k.parent === sel).map(k => label(k.addr));
   const ago = n.last ? Math.max(0, Math.round(Date.now() / 1000 - n.last)) : null, c = k => t("card." + k);
-  const fwdTotal = n.fwd.n + n.fwd.lost;
+  const fwdTotal = n.fwd.n + n.fwd.lost, id = S.identities[n.addr] || null;
   const rows = [[c("role"), t("role." + rl)], meta.model ? [c("model"), meta.model] : null, n.ieee && S.vendors[n.ieee] ? [c("vendor"), S.vendors[n.ieee]] : null,
+    id && id.manufacturer ? [c("idMaker"), id.manufacturer] : null, id && id.model ? [c("idModel"), id.model] : null,
+    id && id.power ? [c("idPower"), t("power." + (ZLM.has("power." + id.power) ? id.power : "unknown"))] : null,
     [c("short"), n.addr], [c("ieee"), n.ieee || c("notSeen")],
     n.parent ? [c("parent"), label(n.parent)] : null,
     rl !== "zed" ? [c("children"), kids.length ? kids.join(", ") : c("none")] : null,
@@ -576,8 +596,11 @@ function renderCard() {
     n.beacon ? [c("beacon"), t("card.beaconValue", { zr: c(n.beacon.zr ? "accepted" : "refused"), zed: c(n.beacon.zed ? "accepted" : "refused") })] : null].filter(Boolean);
   const links = [...S.pairs.values()].filter(p => p.a === sel || p.b === sel).sort((a, b) => b.frames - a.frames)
     .map(p => `<li>${esc(t("card.linkRow", { name: label(p.a === sel ? p.b : p.a), frames: p.frames, pct: Math.round(retryRate(p) * 100) }))}</li>`).join("");
+  const costRows = S.costs[sel] || [];
+  const costs = costRows.map(r => { const hi = r.incoming >= 5 || r.outgoing >= 5; return `<li><span>${esc(label(r.addr))}</span><span class="${hi ? "hi" : ""}">${esc(t("card.costRow", { in: r.incoming, out: r.outgoing }))}</span></li>`; }).join("");
   $("cardBody").innerHTML = `<h3>${esc(label(sel))}</h3><dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
     ${links ? `<div class="note">${esc(c("links"))}</div><ul>${links}</ul>` : ""}
+    ${costs ? `<div class="note">${esc(c("costs"))}</div><ul class="costs">${costs}</ul>` : ""}
     <p>${Object.entries(n.cats).sort((a, b) => b[1] - a[1]).map(([cat, k]) => chip(cat, ` <span class="n">${k}</span>`)).join(" ")}</p>`;
   $("renameForm").hidden = !n.ieee; $("btnWatch").hidden = !n.ieee;
   $("btnWatch").textContent = t(isFocus(n) ? "card.unwatch" : "card.watch"); $("btnWatch").setAttribute("aria-pressed", String(isFocus(n)));
@@ -585,6 +608,11 @@ function renderCard() {
 }
 function findIssues() {
   const out = [];
+  if (S.security && S.security.vulnerable) out.push({ weight: 100, node: null, text: t("issues.vulnerable") });
+  for (const [addr, costRows] of Object.entries(S.costs)) for (const r of costRows) {
+    const worst = Math.max(r.incoming, r.outgoing);
+    if (worst >= 5) out.push({ weight: 5 + worst / 10, node: addr, text: t("issues.cost", { a: label(addr), b: label(r.addr), in: r.incoming, out: r.outgoing }) });
+  }
   for (const p of S.pairs.values()) if (quality(p) === "poor")
     out.push({ weight: 3 + retryRate(p), node: p.a, text: t("issues.link", { a: label(p.a), b: label(p.b), pct: Math.round(retryRate(p) * 100), frames: p.frames }) });
   for (const n of S.nodes.values()) {
@@ -657,6 +685,69 @@ ZLM.setExtras(box => {
   input.addEventListener("change", () => { animOn = input.checked; prefs.set("anim", animOn ? null : "off"); });
 });
 $("btnSettings").addEventListener("click", () => ZLM.openSettings());
+
+// ------------------------------------------------------------------ security dialog
+let secDialog = null, secKeyMsg = "";
+const numberedList = p => { const out = []; for (let i = 1; ZLM.has(`${p}.${i}`); i++) out.push(t(`${p}.${i}`)); return out; };
+function buildSecurity() {
+  secDialog = document.createElement("dialog");
+  secDialog.className = "settings"; secDialog.setAttribute("aria-labelledby", "secTitle");
+  secDialog.innerHTML = `
+    <header><h2 id="secTitle" data-i18n="sec.title"></h2><button type="button" id="secClose" data-i18n-aria="settings.close">×</button></header>
+    <div class="body">
+      <section>
+        <h3 data-i18n="sec.test.title"></h3>
+        <div class="secbox" id="secVerdict" role="status"></div>
+        <p class="note" data-i18n="sec.test.help"></p>
+        <ol class="wizard" id="secWizard"></ol>
+      </section>
+      <section>
+        <h3 data-i18n="sec.key.title"></h3>
+        <p class="note" data-i18n="sec.key.help"></p>
+        <p id="secKeyStatus" role="status"></p>
+        <form class="keyform" id="secKeyForm">
+          <label for="secKeyInput"><span data-i18n="sec.key.label"></span>
+            <input id="secKeyInput" type="text" inputmode="latin" autocomplete="off" spellcheck="false" maxlength="47" placeholder="aabbcc…"></label>
+          <button type="submit" data-i18n="sec.key.save"></button>
+          <button type="button" id="secKeyClear" data-i18n="sec.key.clear"></button>
+        </form>
+        <p class="note" id="secKeyMsg" role="status"></p>
+      </section>
+    </div>`;
+  document.body.appendChild(secDialog);
+  secDialog.querySelector("#secClose").addEventListener("click", () => secDialog.close());
+  secDialog.addEventListener("click", ev => { if (ev.target === secDialog) secDialog.close(); });
+  secDialog.querySelector("#secWizard").innerHTML = numberedList("sec.step").map(s => `<li>${rich(s)}</li>`).join("");
+  secDialog.querySelector("#secKeyForm").addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const input = secDialog.querySelector("#secKeyInput");
+    try { S.security = await ZLM.getJson("/api/network-key", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: input.value }) }); secKeyMsg = t("sec.key.set"); input.value = ""; }
+    catch (err) { secKeyMsg = t("sec.key.bad", { error: err.message }); }
+    renderSecurity();
+  });
+  secDialog.querySelector("#secKeyClear").addEventListener("click", async () => {
+    try { S.security = await ZLM.getJson("/api/network-key", { method: "DELETE" }); secKeyMsg = t("sec.key.cleared"); }
+    catch (err) { secKeyMsg = t("sec.key.bad", { error: err.message }); }
+    renderSecurity();
+  });
+}
+function renderSecurity() {
+  const s = S.security || {};
+  $("btnSecurity").classList.toggle("vuln", !!s.vulnerable);
+  if (!secDialog) return;
+  ZLM.translate(secDialog);
+  secDialog.querySelector("#secWizard").innerHTML = numberedList("sec.step").map(x => `<li>${rich(x)}</li>`).join("");
+  const box = secDialog.querySelector("#secVerdict");
+  let cls = "wait", html = `<b>${esc(t("sec.verdict.untested"))}</b>`;
+  if (s.vulnerable) { cls = "vuln"; html = `<b>${esc(t("sec.verdict.vuln"))}</b><p>${rich(t("sec.verdict.vulnBody"))}</p>`; if (s.key) html += `<span class="keyval">${esc(s.key)}</span>`; }
+  else if (s.secureJoinSeen) { cls = "safe"; html = `<b>${esc(t("sec.verdict.safe"))}</b><p>${rich(t("sec.verdict.safeBody"))}</p>`; }
+  box.className = "secbox " + cls; box.innerHTML = html;
+  const ks = secDialog.querySelector("#secKeyStatus");
+  ks.textContent = s.keyKnown ? t(s.keySource === "recovered" ? "sec.key.recovered" : "sec.key.entered") : t("sec.key.none");
+  secDialog.querySelector("#secKeyMsg").textContent = secKeyMsg;
+}
+$("btnSecurity").addEventListener("click", () => { if (!secDialog) buildSecurity(); secKeyMsg = ""; renderSecurity(); secDialog.showModal(); });
+document.addEventListener("zlm:lang", () => { if (secDialog) renderSecurity(); });
 $("btnFreeze").addEventListener("click", () => { frozen = !frozen; $("btnFreeze").setAttribute("aria-pressed", String(frozen)); $("btnFreeze").textContent = t(frozen ? "log.resume" : "log.freeze"); if (!frozen) renderLog(); });
 for (let c = 11; c <= 26; c++) { const o = document.createElement("option"); o.value = c; o.textContent = c; $("chan").appendChild(o); }
 $("chan").addEventListener("change", () => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "channel", channel: Number($("chan").value) })); });
@@ -699,13 +790,18 @@ async function connect() {
     if (d.type === "hello") {
       reset(); sel = null; setNames(d.names, d.vendors || {}); S.mode = d.mode; S.channel = d.channel; S.canTune = !!d.can_tune;
       S.focusIeee = (d.mode !== "demo" && prefs.get("focus", null)) || d.focus || null;
+      if (d.security) S.security = d.security;
+      S.identities = d.identities || {}; S.costs = d.linkCosts || {};
       $("chanBox").hidden = !S.canTune; if (S.channel) $("chan").value = S.channel;
-      $("log").innerHTML = ""; issuesShown = "\u0000"; dirty.devices = dirty.card = dirty.legend = true; renderLegend(true);
+      $("log").innerHTML = ""; issuesShown = "\u0000"; dirty.devices = dirty.card = dirty.legend = dirty.security = true; renderLegend(true);
     }
     else if (d.type === "backlog") { for (const e of d.events) processEvent(e, false); renderLog(); }
     else if (d.type === "ev") processEvent(d.e, true);
     else if (d.type === "names") { setNames(d.names, d.vendors); dirty.devices = dirty.card = true; renderLog(); }
     else if (d.type === "vendors") { Object.assign(S.vendors, d.vendors); dirty.card = true; }
+    else if (d.type === "security") { const { type, ...rest } = d; S.security = rest; dirty.security = true; dirty.card = true; issuesShown = "\u0000"; }
+    else if (d.type === "identity") { S.identities[d.addr] = d.id; dirty.card = dirty.devices = true; }
+    else if (d.type === "linkcosts") { S.costs[d.addr] = d.rows; dirty.card = true; issuesShown = "\u0000"; }
     else if (d.type === "status") sniffer = d;
   };
 }
@@ -723,6 +819,7 @@ async function connect() {
     if (dirty.legend) { renderLegend(); dirty.legend = false; }
     if (dirty.devices) { renderDevices(); dirty.devices = false; }
     if (dirty.card) { renderCard(); dirty.card = false; }
+    if (dirty.security) { renderSecurity(); dirty.security = false; }
     if (++ticks % 5 === 0) renderIssues();
   }, 400);
 })();

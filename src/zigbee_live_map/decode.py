@@ -268,7 +268,7 @@ def build_link_status(net_key: bytes, *, pan: int, src: int, src64: int, counter
     payload = bytes([0x08, 0x40 | (len(neighbours) & 0x1F)])
     for addr, incoming, outgoing in neighbours:
         payload += addr.to_bytes(2, "little") + bytes([(incoming & 0x07) | ((outgoing & 0x07) << 4)])
-    nwk = (0x020A | (2 << 2)).to_bytes(2, "little") + (0xFFFC).to_bytes(2, "little") + src.to_bytes(2, "little") + bytes([1, seq])
+    nwk = (0x0209 | (2 << 2)).to_bytes(2, "little") + (0xFFFC).to_bytes(2, "little") + src.to_bytes(2, "little") + bytes([1, seq])
     secctl = 0x28 | crypto.SECURITY_LEVEL
     aux = bytes([secctl]) + counter.to_bytes(4, "little") + src64.to_bytes(8, "little") + bytes([0])
     mac = _mac_data_header(seq, pan, 0xFFFC, src)

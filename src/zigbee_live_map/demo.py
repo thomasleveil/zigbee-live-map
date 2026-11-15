@@ -10,11 +10,16 @@ from __future__ import annotations
 import asyncio
 import random
 
+from . import crypto, decode
 from . import frames as zf
 
 PAN = "0x1a62"
+PAN_ID = int(PAN, 16)
 EPID = "02:00:00:00:00:1a:62:00"
 COORDINATOR = "0x0000"
+# The demo network is deliberately insecure: it hands its key out under the default link key, so the
+# vulnerability test lights up without any hardware. This key is fictional and only ever used here.
+DEMO_NET_KEY = bytes.fromhex("c0ffee0011223344556677889900abcd")
 # address: (name, model, parent, typical RSSI at the sniffer)
 ROUTERS = {
     "0x2b01": ("Kitchen plug", "Smart plug", COORDINATOR, -52),
@@ -43,6 +48,10 @@ def ieee_of(addr: str) -> str:
     return f"02:00:00:ff:fe:00:{value >> 8:02x}:{value & 0xFF:02x}"
 
 
+def eui_of(addr: str) -> int:
+    return int(ieee_of(addr).replace(":", ""), 16)
+
+
 def names() -> dict:
     table = {ieee_of(COORDINATOR): {"name": "Coordinator", "model": "USB coordinator", "nwk": COORDINATOR}}
     for addr, (name, model, _parent, _rssi) in {**ROUTERS, **END_DEVICES}.items():
@@ -58,7 +67,9 @@ class DemoNetwork:
         self.rssi = {COORDINATOR: -41, **{a: v[3] for a, v in {**ROUTERS, **END_DEVICES}.items()}}
         self.mac_seq = {a: random.randrange(256) for a in self.rssi}
         self.nwk_seq = {a: random.randrange(256) for a in self.rssi}
+        self.sec_ctr = {a: random.randrange(1 << 20) for a in self.rssi}  # security frame counter per device
         self.pending: dict[str, list] = {a: [] for a in END_DEVICES}
+        self.join_i = 0
         self.air = asyncio.Lock()  # one frame and its acknowledgement at a time
 
     async def sleep(self, seconds: float) -> None:
@@ -120,11 +131,64 @@ class DemoNetwork:
             await self.hop(router, "0xffff", command=command, nsrc=COORDINATOR, ndst=ndst, radius=radius - depth, nseq=nseq)
 
     # ---- periodic behaviours ----
+    def neighbours_of(self, addr: str) -> list[str]:
+        out = [self.parent[addr]] if self.parent.get(addr) else []
+        out += [a for a, p in self.parent.items() if p == addr]
+        return out
+
+    def cost_between(self, a: str, b: str) -> int:
+        if frozenset((a, b)) in WEAK_LINKS:
+            return random.choice([5, 6, 7])              # the weak link: the mesh itself rates it poor
+        return random.choice([1, 1, 2, 2, 3])
+
+    async def secured(self, src: str, frame: bytes) -> None:
+        async with self.air:
+            await self.emit(frame, self.rssi[src] + random.randint(-3, 3))
+
     async def link_status(self, addr: str) -> None:
+        """A real, network-key-secured Link Status: each neighbour with the costs this router measures."""
         await self.sleep(random.random() * 15)
         while True:
-            await self.hop(addr, "0xffff", command=True, nsrc=addr, ndst="0xfffc", radius=1, nseq=self._next(self.nwk_seq, addr), size=8)
+            rows = [(int(n, 16), self.cost_between(addr, n), self.cost_between(addr, n)) for n in self.neighbours_of(addr)]
+            frame = decode.build_link_status(DEMO_NET_KEY, pan=PAN_ID, src=int(addr, 16), src64=eui_of(addr),
+                                             counter=self._next(self.sec_ctr, addr), neighbours=rows, seq=self._next(self.mac_seq, addr))
+            await self.secured(addr, frame)
             await self.sleep(15)
+
+    async def announce(self, addr: str, model: str, router: bool) -> None:
+        """A device telling, in a decryptable ZCL Basic response, what it is (maker, model, power)."""
+        parent = self.parent.get(addr, COORDINATOR)
+        payload = decode.zcl_basic_response("DemoCorp", model, power=1 if router else 3)
+        frame = decode.build_secured_nwk(DEMO_NET_KEY, seq=self._next(self.mac_seq, addr), pan=PAN_ID,
+                                         mac_dst=int(parent, 16), mac_src=int(addr, 16), nwk_dst=int(COORDINATOR, 16),
+                                         nwk_src=int(addr, 16), radius=30, nwk_seq=self._next(self.nwk_seq, addr),
+                                         src64=eui_of(addr), counter=self._next(self.sec_ctr, addr), payload=payload)
+        await self.secured(addr, frame)
+
+    async def identities(self) -> None:
+        await self.sleep(13)                             # after the first join has revealed the key
+        while True:
+            for addr, (_name, model, _parent, _rssi) in {**ROUTERS, **END_DEVICES}.items():
+                await self.announce(addr, model, addr in ROUTERS)
+                await self.sleep(2)
+            await self.sleep(180)
+
+    async def joining(self) -> None:
+        """Now and then a device re-joins, and the coordinator hands it the network key under the default
+        link key. That is exactly the vulnerability the security test looks for."""
+        targets = list(END_DEVICES)
+        await self.sleep(8)
+        while True:
+            device = targets[self.join_i % len(targets)]
+            self.join_i += 1
+            frame = decode.build_transport_key(crypto.DEFAULT_TC_LINK_KEY, seq=self._next(self.mac_seq, COORDINATOR),
+                                               pan=PAN_ID, mac_dst=int(self.parent[device], 16), mac_src=int(COORDINATOR, 16),
+                                               coord64=eui_of(COORDINATOR), counter=self._next(self.sec_ctr, COORDINATOR),
+                                               network_key=DEMO_NET_KEY)
+            await self.secured(COORDINATOR, frame)
+            await self.sleep(0.3)
+            await self.announce(device, END_DEVICES[device][1], router=False)
+            await self.sleep(95)
 
     async def polling(self, addr: str) -> None:
         period = random.uniform(1.6, 5.5)
@@ -174,7 +238,7 @@ class DemoNetwork:
             await self.sleep(70)
 
     async def run(self) -> None:
-        tasks = [self.coordinator_routines(), self.discovery(), self.link_status(COORDINATOR)]
+        tasks = [self.coordinator_routines(), self.discovery(), self.link_status(COORDINATOR), self.joining(), self.identities()]
         tasks += [self.link_status(r) for r in ROUTERS]
         tasks += [self.reporting(r, 8, 20) for r in ROUTERS]
         tasks += [self.polling(d) for d in END_DEVICES]

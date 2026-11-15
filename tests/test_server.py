@@ -2,11 +2,14 @@ import asyncio
 
 from aiohttp.test_utils import TestClient, TestServer
 
+from zigbee_live_map import crypto, decode
 from zigbee_live_map.devices import DeviceStore
 from zigbee_live_map.server import Hub, build_app
 from zigbee_live_map.vendors import Registry
 
 IEEE = "00:12:4b:00:00:00:00:01"
+NET = bytes.fromhex("0f1e2d3c4b5a69788796a5b4c3d2e1f0")
+COORD64, DEV64 = 0x00124B00_1A2B3C4D, 0x00158D00_01A2B3C4
 
 
 def run(scenario, tmp_path):
@@ -110,5 +113,61 @@ def test_map_pages_learn_names_and_chip_makers_over_the_websocket(tmp_path):
         assert update == {"type": "names", "names": {IEEE: {"name": "Stick"}}, "vendors": {IEEE: "Texas Instruments"}}
         assert hub.store.describe()[0]["name"] == "My devices"
         await ws.close()
+
+    run(scenario, tmp_path)
+
+
+def test_network_key_endpoint_validates_sets_and_clears(tmp_path):
+    async def scenario(client, hub, origin):
+        assert (await client.put("/api/network-key", json={"key": "not hex"}, headers=origin)).status == 400
+        assert (await client.put("/api/network-key", json={"key": "0011"}, headers=origin)).status == 400  # too short
+        assert (await client.put("/api/network-key", json={"key": NET.hex()})).status == 403  # no token: not our page
+        ok = await client.put("/api/network-key", json={"key": NET.hex()}, headers=origin)
+        state = await ok.json()
+        assert state["keyKnown"] and state["keySource"] == "entered" and state["key"] == NET.hex()
+        assert hub.network_key == NET
+        cleared = await (await client.delete("/api/network-key", headers=origin)).json()
+        assert cleared["keyKnown"] is False and hub.network_key is None
+
+    run(scenario, tmp_path)
+
+
+def test_a_default_key_join_is_flagged_and_the_key_is_recovered(tmp_path):
+    async def scenario(client, hub, origin):
+        frame = decode.build_transport_key(crypto.DEFAULT_TC_LINK_KEY, seq=1, pan=0x1A62, mac_dst=0xCD4A,
+                                           mac_src=0x0000, coord64=COORD64, counter=0, network_key=NET)
+        await hub.publish(frame, 1.0, None)
+        assert hub.vulnerable is True
+        assert hub.network_key == NET and hub.key_source == "recovered"
+        assert hub.security_state()["key"] == NET.hex()
+
+    run(scenario, tmp_path)
+
+
+def test_a_non_default_join_is_seen_but_not_flagged(tmp_path):
+    async def scenario(client, hub, origin):
+        unique = bytes.fromhex("0102030405060708090a0b0c0d0e0f10")
+        frame = decode.build_transport_key(unique, seq=1, pan=0x1A62, mac_dst=0xCD4A, mac_src=0x0000,
+                                           coord64=COORD64, counter=0, network_key=NET)
+        await hub.publish(frame, 1.0, None)
+        assert hub.vulnerable is False and hub.secure_join_seen is True and hub.network_key is None
+
+    run(scenario, tmp_path)
+
+
+def test_identity_and_link_costs_are_read_once_a_key_is_known(tmp_path):
+    async def scenario(client, hub, origin):
+        hub.network_key = NET
+        basic = decode.zcl_basic_response("LUMI", "lumi.weather", power=3)
+        frame = decode.build_secured_nwk(NET, seq=5, pan=0x1A62, mac_dst=0x0000, mac_src=0x72F6,
+                                         nwk_dst=0x0000, nwk_src=0x72F6, radius=30, nwk_seq=5,
+                                         src64=DEV64, counter=42, payload=basic)
+        await hub.publish(frame, 1.0, None)
+        assert hub.identities["0x72f6"] == {"manufacturer": "LUMI", "model": "lumi.weather", "power": "battery"}
+        status = decode.build_link_status(NET, pan=0x1A62, src=0x6CA5, src64=DEV64, counter=9,
+                                          neighbours=[(0x0000, 1, 1), (0x29E5, 3, 5)])
+        await hub.publish(status, 2.0, None)
+        assert hub.link_quality["0x6ca5"] == [{"addr": "0x0000", "incoming": 1, "outgoing": 1},
+                                              {"addr": "0x29e5", "incoming": 3, "outgoing": 5}]
 
     run(scenario, tmp_path)

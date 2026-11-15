@@ -30,7 +30,7 @@ from urllib.parse import urlsplit
 
 from aiohttp import WSMsgType, web
 
-from . import __version__, demo
+from . import __version__, decode, demo
 from .devices import DeviceError, DeviceStore
 from .frames import Classifier, read_pcap
 from .vendors import Registry, VendorError
@@ -69,13 +69,30 @@ class Hub:
         self.heard: dict[str, str] = {}  # IEEE -> short address, as heard on the air
         self.generation = 0  # bumped on every channel change, so frames from the old channel are dropped
         self.source: LiveSource | None = None
+        # Security: what this network's own traffic reveals once a key is known or recovered.
+        self.network_key: bytes | None = None   # held in memory only, never written to disk
+        self.key_source: str | None = None       # "recovered" (from a default-key join) or "entered"
+        self.vulnerable = False                   # a join was secured with the default link key
+        self.secure_join_seen = False             # a join was secured with a non-default link key
+        self.identities: dict[str, dict] = {}     # NWK short address -> {manufacturer, model, power}
+        self.link_quality: dict[str, list] = {}   # router NWK short address -> per-neighbour costs
 
     def vendors(self) -> dict[str, str]:
         known = set(self.store.merged()) | set(self.heard)
         return {ieee: org for ieee in known if (org := self.registry.lookup(ieee))}
 
+    def security_state(self) -> dict:
+        return {"vulnerable": self.vulnerable, "secureJoinSeen": self.secure_join_seen,
+                "keyKnown": self.network_key is not None, "keySource": self.key_source,
+                "key": self.network_key.hex() if self.network_key else None}
+
+    async def send_security(self) -> None:
+        await self.send_all({"type": "security", **self.security_state()})
+
     def hello(self) -> dict:
-        return {"type": "hello", "version": __version__, **self.info, "names": self.store.merged(), "vendors": self.vendors()}
+        return {"type": "hello", "version": __version__, **self.info, "names": self.store.merged(),
+                "vendors": self.vendors(), "security": self.security_state(),
+                "identities": self.identities, "linkCosts": self.link_quality}
 
     async def send_all(self, message: dict) -> None:
         text = json.dumps(message, separators=(",", ":"))
@@ -94,7 +111,37 @@ class Hub:
             org = self.registry.lookup(ieee)
             if org:
                 await self.send_all({"type": "vendors", "vendors": {ieee: org}})
+        await self._inspect(frame, event)
         await self.send_all({"type": "ev", "e": event})
+
+    async def _inspect(self, frame: bytes, event: dict) -> None:
+        """Read what the encrypted layers give up: the vulnerability test, device identity, link costs."""
+        if not self.vulnerable:
+            recovered = decode.recover_network_key(frame)   # default link key only: that is the test
+            if recovered is not None:
+                self.vulnerable = True
+                if self.network_key is None:
+                    self.network_key, self.key_source = recovered, "recovered"
+                await self.send_security()
+            elif not self.secure_join_seen and decode.transport_key_envelope(frame) is not None:
+                self.secure_join_seen = True   # a join, but secured with a key that is not the default one
+                await self.send_security()
+        key = self.network_key
+        if key is None:
+            return
+        ns = event.get("ns")
+        if not ns:
+            return
+        if event.get("cat") == "link_status":
+            rows = decode.link_costs(frame, key)
+            if rows is not None and self.link_quality.get(ns) != rows:
+                self.link_quality[ns] = rows
+                await self.send_all({"type": "linkcosts", "addr": ns, "rows": rows})
+        elif ns not in self.identities and event.get("cat", "").startswith("data"):
+            ident = decode.identify(frame, key)
+            if ident:
+                self.identities[ns] = ident
+                await self.send_all({"type": "identity", "addr": ns, "id": ident})
 
     async def set_status(self, sniffer: str, detail: str = "") -> None:
         self.status = {"type": "status", "sniffer": sniffer, "detail": detail}
@@ -111,6 +158,12 @@ class Hub:
         self.events.clear()
         self.heard.clear()
         self.classifier = Classifier()
+        # A new channel is a new network: drop the per-network security verdict and a key we recovered here.
+        self.vulnerable = self.secure_join_seen = False
+        self.identities.clear()
+        self.link_quality.clear()
+        if self.key_source == "recovered":
+            self.network_key = self.key_source = None
         self.source.set_channel(channel, self.generation)
         await self.send_all(self.hello())
         await self.set_status("starting")
@@ -339,6 +392,31 @@ async def api_session(request: web.Request) -> web.Response:
     return web.json_response({"token": request.app[TOKEN]}, headers={"Cache-Control": "no-store"})
 
 
+async def api_network_key(request: web.Request) -> web.Response:
+    hub: Hub = request.app[HUB]
+    raw = str((await _json(request)).get("key", "")).strip().replace(":", "").replace(" ", "")
+    try:
+        key = bytes.fromhex(raw)
+    except ValueError:
+        raise DeviceError("the network key must be hexadecimal") from None
+    if len(key) != 16:
+        raise DeviceError("the network key must be 16 bytes (32 hexadecimal characters)")
+    hub.network_key, hub.key_source = key, "entered"
+    hub.identities.clear()
+    hub.link_quality.clear()
+    await hub.send_security()
+    return web.json_response(hub.security_state())
+
+
+async def api_network_key_clear(request: web.Request) -> web.Response:
+    hub: Hub = request.app[HUB]
+    hub.network_key = hub.key_source = None
+    hub.identities.clear()
+    hub.link_quality.clear()
+    await hub.send_security()
+    return web.json_response(hub.security_state())
+
+
 async def api_vendors(request: web.Request) -> web.Response:
     return web.json_response(request.app[HUB].registry.meta)
 
@@ -390,6 +468,7 @@ def build_app(hub: Hub) -> web.Application:
         web.put("/api/lists/{list}/devices/{ieee}", api_device_set), web.delete("/api/lists/{list}/devices/{ieee}", api_device_delete),
         web.post("/api/lists/{list}/import", api_import), web.get("/api/lists/{list}/export", api_export),
         web.get("/api/session", api_session), web.get("/api/vendors", api_vendors), web.post("/api/vendors/refresh", api_vendors_refresh),
+        web.put("/api/network-key", api_network_key), web.delete("/api/network-key", api_network_key_clear),
     ])
     return app
 
