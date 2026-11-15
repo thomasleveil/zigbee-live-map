@@ -22,6 +22,7 @@
 .verdict[hidden] { display: none; }
 
 .stage { display: grid; grid-template-columns: minmax(0, 1fr) 28rem; flex: 1; min-height: 0; }
+.stage.detail-open { grid-template-columns: minmax(16rem, 23rem) minmax(0, 1fr) 28rem; }
 .left { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
 .legend { display: flex; flex-wrap: wrap; gap: .4rem; padding: .55rem .75rem; background: var(--panel); border-bottom: 1px solid var(--line); }
 .graphwrap { position: relative; flex: 1; min-height: 18rem; overflow: hidden; background: radial-gradient(ellipse at 50% 42%, var(--bg2), var(--bg) 72%); }
@@ -42,13 +43,22 @@
 #issues ul { list-style: none; margin: .4rem 0 0; padding: 0; display: grid; gap: .3rem; }
 #issues li button { width: 100%; text-align: left; border-left: 4px solid var(--warn); font-size: .95rem; }
 #issues p { margin: .4rem 0 0; }
-#card { position: relative; flex: none; max-height: 46%; overflow: auto; background: var(--panel2); border-bottom: 1px solid var(--line); padding: .7rem .8rem; font-size: .95rem; }
-#card[hidden] { display: none; }
-#card h3 { font-size: 1.05rem; padding-right: 2.2rem; }
+.detail { display: flex; flex-direction: column; min-height: 0; overflow: auto; background: var(--panel); border-right: 1px solid var(--line); font-size: .95rem; }
+.detail[hidden] { display: none; }
+.detailHead { display: flex; align-items: center; gap: .5rem; padding: .6rem .8rem; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 1; }
+.detailHead h2 { flex: 1; font-size: 1.05rem; word-break: break-word; }
+.detailGroup { padding: .6rem .8rem; border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent); }
+.detailGroup > h3 { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: .35rem; }
+.detailGroup.keyed { border-left: 3px solid var(--accent); }
+.detailGroup.keyed > h3 { color: var(--accent); }
+.detailActions { padding: .6rem .8rem; display: grid; gap: .5rem; }
+.probe { display: grid; gap: .3rem; margin-top: .3rem; border-top: 1px solid var(--line); padding-top: .5rem; }
+.probe > h3 { font-size: .9rem; }
+.probe button[disabled] { opacity: .55; cursor: not-allowed; }
 #card dl { display: grid; grid-template-columns: max-content 1fr; gap: .15rem .7rem; margin: .5rem 0; }
 #card dt { color: var(--muted); } #card dd { margin: 0; word-break: break-word; }
 #card ul { margin: .2rem 0 .5rem; padding-left: 1.1rem; }
-#card .close { position: absolute; right: .5rem; top: .5rem; padding: .1rem .55rem; }
+#card .close { padding: .1rem .55rem; }
 #card form { display: flex; gap: .4rem; margin-top: .5rem; align-items: end; flex-wrap: wrap; }
 #card form[hidden], #btnWatch[hidden] { display: none; }
 #card label { display: grid; gap: .15rem; flex: 1; font-size: .9rem; color: var(--muted); }
@@ -76,7 +86,8 @@
 
 @media (max-width: 1000px) {
   .app { height: auto; min-height: 0; }
-  .stage { grid-template-columns: 1fr; }
+  .stage, .stage.detail-open { grid-template-columns: 1fr; }
+  .detail { max-height: 55vh; border-right: 0; border-bottom: 1px solid var(--line); }
   .left { border-right: 0; } .graphwrap { height: 68vh; flex: none; }
   .side { height: 80vh; border-top: 1px solid var(--line); } .hint { display: none; }
 }
@@ -116,7 +127,27 @@
   <button type="button" id="btnSettings" data-i18n="nav.settings"></button>
 </header>
 
-<div class="stage">
+<div class="stage" id="stage">
+  <aside class="detail" id="card" hidden aria-labelledby="detailName">
+    <div class="detailHead">
+      <h2 id="detailName"></h2>
+      <button type="button" class="close" id="cardClose" data-i18n-aria="card.close">×</button>
+    </div>
+    <div id="cardBody"></div>
+    <div class="detailActions">
+      <button type="button" id="btnWatch" aria-pressed="false"></button>
+      <form id="renameForm">
+        <label for="renameInput"><span data-i18n="card.rename"></span><input id="renameInput" type="text" maxlength="60" autocomplete="off"></label>
+        <button type="submit" data-i18n="card.save"></button>
+      </form>
+      <div class="probe">
+        <h3 data-i18n="probe.title"></h3>
+        <button type="button" disabled data-i18n="probe.ping"></button>
+        <button type="button" disabled data-i18n="probe.role"></button>
+        <p class="note" data-i18n="probe.passive"></p>
+      </div>
+    </div>
+  </aside>
   <div class="left">
     <div class="legend" id="legend" role="group" data-i18n-aria="map.legendAria"></div>
     <div class="graphwrap">
@@ -138,15 +169,6 @@
       <p class="note" id="issuesNone" data-i18n="issues.none"></p>
       <p class="note" data-i18n="issues.help"></p>
     </details>
-    <div id="card" hidden>
-      <button type="button" class="close" id="cardClose" data-i18n-aria="card.close">×</button>
-      <div id="cardBody"></div>
-      <button type="button" id="btnWatch" aria-pressed="false"></button>
-      <form id="renameForm">
-        <label for="renameInput"><span data-i18n="card.rename"></span><input id="renameInput" type="text" maxlength="60" autocomplete="off"></label>
-        <button type="submit" data-i18n="card.save"></button>
-      </form>
-    </div>
     <ol id="log"></ol>
   </aside>
 </div>
@@ -575,14 +597,15 @@ function renderDevices() {
 }
 const ms1 = s => Math.round(s * 1000);
 function renderCard() {
-  const card = $("card"); if (!sel || !S.nodes.has(sel)) { card.hidden = true; return; }
+  const card = $("card");
+  $("stage").classList.toggle("detail-open", !!(sel && S.nodes.has(sel)));
+  if (!sel || !S.nodes.has(sel)) { card.hidden = true; return; }
   const n = S.nodes.get(sel), meta = (n.ieee && S.names[n.ieee]) || {}, rl = role(n);
   const kids = [...S.nodes.values()].filter(k => k.parent === sel).map(k => label(k.addr));
   const ago = n.last ? Math.max(0, Math.round(Date.now() / 1000 - n.last)) : null, c = k => t("card." + k);
   const fwdTotal = n.fwd.n + n.fwd.lost, id = S.identities[n.addr] || null;
-  const rows = [[c("role"), t("role." + rl)], meta.model ? [c("model"), meta.model] : null, n.ieee && S.vendors[n.ieee] ? [c("vendor"), S.vendors[n.ieee]] : null,
-    id && id.manufacturer ? [c("idMaker"), id.manufacturer] : null, id && id.model ? [c("idModel"), id.model] : null,
-    id && id.power ? [c("idPower"), t("power." + (ZLM.has("power." + id.power) ? id.power : "unknown"))] : null,
+  // What the sniffer reads from the clear headers, with no key.
+  const clear = [[c("role"), t("role." + rl)], meta.model ? [c("model"), meta.model] : null, n.ieee && S.vendors[n.ieee] ? [c("vendor"), S.vendors[n.ieee]] : null,
     [c("short"), n.addr], [c("ieee"), n.ieee || c("notSeen")],
     n.parent ? [c("parent"), label(n.parent)] : null,
     rl !== "zed" ? [c("children"), kids.length ? kids.join(", ") : c("none")] : null,
@@ -596,12 +619,22 @@ function renderCard() {
     n.beacon ? [c("beacon"), t("card.beaconValue", { zr: c(n.beacon.zr ? "accepted" : "refused"), zed: c(n.beacon.zed ? "accepted" : "refused") })] : null].filter(Boolean);
   const links = [...S.pairs.values()].filter(p => p.a === sel || p.b === sel).sort((a, b) => b.frames - a.frames)
     .map(p => `<li>${esc(t("card.linkRow", { name: label(p.a === sel ? p.b : p.a), frames: p.frames, pct: Math.round(retryRate(p) * 100) }))}</li>`).join("");
+  // What only the network key reveals.
+  const keyed = [id && id.manufacturer ? [c("idMaker"), id.manufacturer] : null, id && id.model ? [c("idModel"), id.model] : null,
+    id && id.power ? [c("idPower"), t("power." + (ZLM.has("power." + id.power) ? id.power : "unknown"))] : null].filter(Boolean);
   const costRows = S.costs[sel] || [];
   const costs = costRows.map(r => { const hi = r.incoming >= 5 || r.outgoing >= 5; return `<li><span>${esc(label(r.addr))}</span><span class="${hi ? "hi" : ""}">${esc(t("card.costRow", { in: r.incoming, out: r.outgoing }))}</span></li>`; }).join("");
-  $("cardBody").innerHTML = `<h3>${esc(label(sel))}</h3><dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
-    ${links ? `<div class="note">${esc(c("links"))}</div><ul>${links}</ul>` : ""}
-    ${costs ? `<div class="note">${esc(c("costs"))}</div><ul class="costs">${costs}</ul>` : ""}
-    <p>${Object.entries(n.cats).sort((a, b) => b[1] - a[1]).map(([cat, k]) => chip(cat, ` <span class="n">${k}</span>`)).join(" ")}</p>`;
+  const dl = rows => `<dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`;
+  $("detailName").textContent = label(sel);
+  $("cardBody").innerHTML =
+    `<div class="detailGroup"><h3>${esc(t("detail.clear"))}</h3>${dl(clear)}` +
+    (links ? `<div class="note">${esc(c("links"))}</div><ul>${links}</ul>` : "") +
+    `<p>${Object.entries(n.cats).sort((a, b) => b[1] - a[1]).map(([cat, k]) => chip(cat, ` <span class="n">${k}</span>`)).join(" ")}</p></div>` +
+    `<div class="detailGroup keyed"><h3>${esc(t("detail.keyed"))}</h3>` +
+    (keyed.length || costs
+      ? (keyed.length ? dl(keyed) : "") + (costs ? `<div class="note">${esc(c("costs"))}</div><ul class="costs">${costs}</ul>` : "")
+      : `<p class="note">${esc(t(S.security && S.security.keyKnown ? "detail.keyedWaiting" : "detail.keyless"))}</p>`) +
+    `</div>`;
   $("renameForm").hidden = !n.ieee; $("btnWatch").hidden = !n.ieee;
   $("btnWatch").textContent = t(isFocus(n) ? "card.unwatch" : "card.watch"); $("btnWatch").setAttribute("aria-pressed", String(isFocus(n)));
   card.hidden = false;
