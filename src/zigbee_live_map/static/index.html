@@ -182,6 +182,7 @@ const BROADCAST = new Set(["0xffff", "0xfffd", "0xfffc", "0xfffb"]);
 const MAX_EVENTS = 20000, LOG_ROWS = 250, WINDOW_S = 120;
 const FORWARD_TIMEOUT_S = 12;        // a frame not relayed after this long is counted as not relayed
 const LINK_MIN_FRAMES = 20;          // below this, a retransmission rate says nothing
+const RETRY_EMA = 0.05;              // the retry rate is a moving average, so it falls again when a link recovers
 const RM = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const catLabel = c => t(`cat.${ZLM.has(`cat.${c}.label`) ? c : "other"}.label`);
 const catLearn = c => t(`cat.${ZLM.has(`cat.${c}.learn`) ? c : "other"}.learn`);
@@ -229,11 +230,11 @@ function link(a, b) {
 // Delivery quality of a pair of devices: how often an addressed frame had to be sent again.
 function pair(a, b) {
   let p = S.pairs.get(pairKey(a, b));
-  if (!p) { p = { a: a < b ? a : b, b: a < b ? b : a, frames: 0, retries: 0 }; S.pairs.set(pairKey(a, b), p); }
+  if (!p) { p = { a: a < b ? a : b, b: a < b ? b : a, frames: 0, retries: 0, rate: 0 }; S.pairs.set(pairKey(a, b), p); }
   return p;
 }
-const retryRate = p => p ? Math.min(1, p.retries / Math.max(1, p.frames - p.retries)) : 0;
-const rated = p => !!p && p.frames - p.retries >= LINK_MIN_FRAMES;
+const retryRate = p => p ? p.rate : 0;   // moving average of "this frame was a retransmission"
+const rated = p => !!p && p.frames >= LINK_MIN_FRAMES;
 const quality = p => !rated(p) ? "unknown" : retryRate(p) >= .15 ? "poor" : retryRate(p) >= .05 ? "fair" : "good";
 
 // ------------------------------------------------------------------ event intake
@@ -314,6 +315,7 @@ function processEvent(e, live) {
   if (e.nd && !BROADCAST.has(e.nd)) node(e.nd);
   if (ms && md && !toAll && e.cat !== "ack") {
     const p = pair(ms, md), n = S.nodes.get(ms); p.frames++; n.unicast++;
+    p.rate += ((e.rt ? 1 : 0) - p.rate) * RETRY_EMA;   // decays as good frames arrive, so a healed link clears
     if (e.rt) { p.retries++; n.retries++; }
     if (HOP.has(e.cat)) { const l = link(ms, md); l.count++; if (live) l.heat = 1; }
     trackForward(e, ms, md);
