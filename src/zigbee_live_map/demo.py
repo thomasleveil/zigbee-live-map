@@ -160,7 +160,7 @@ class DemoNetwork:
     async def announce(self, addr: str, model: str, router: bool) -> None:
         """A device telling, in a decryptable ZCL Basic response, what it is (maker, model, power)."""
         parent = self.parent.get(addr, COORDINATOR)
-        payload = decode.zcl_basic_response("DemoCorp", model, power=1 if router else 3)
+        payload = decode.zcl_basic_response("DemoCorp", model, power=1 if router else 3, sw="1.4.0-demo")
         frame = decode.build_secured_nwk(DEMO_NET_KEY, seq=self._next(self.mac_seq, addr), pan=PAN_ID,
                                          mac_dst=int(parent, 16), mac_src=int(addr, 16), nwk_dst=int(COORDINATOR, 16),
                                          nwk_src=int(addr, 16), radius=30, nwk_seq=self._next(self.nwk_seq, addr),

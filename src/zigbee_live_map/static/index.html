@@ -637,6 +637,7 @@ function renderCard() {
   const batt = S.batteries[n.addr];
   const keyed = [id && id.manufacturer ? [c("idMaker"), id.manufacturer] : null, id && id.model ? [c("idModel"), id.model] : null,
     id && id.power ? [c("idPower"), t("power." + (ZLM.has("power." + id.power) ? id.power : "unknown"))] : null,
+    id && id.sw ? [c("firmware"), id.sw] : null, id && id.appVer != null ? [c("appver"), id.appVer] : null,
     batt ? [c("battery"), batt.percent != null ? `${batt.percent} %` : `${batt.volts} V`] : null].filter(Boolean);
   const costRows = S.costs[sel] || [];
   const costs = costRows.map(r => { const hi = r.incoming >= 5 || r.outgoing >= 5; return `<li><span>${esc(label(r.addr))}</span><span class="${hi ? "hi" : ""}">${esc(t("card.costRow", { in: r.incoming, out: r.outgoing }))}</span></li>`; }).join("");

@@ -300,6 +300,8 @@
   "card.costs": "Coûts de lien mesurés par ce routeur",
   "card.costRow": "entrant {in}/7 · sortant {out}/7",
   "card.battery": "Batterie",
+  "card.firmware": "Firmware",
+  "card.appver": "Version appli",
   "detail.clear": "Sans la clé réseau",
   "detail.keyed": "Grâce à la clé réseau",
   "detail.keyless": "Avec la clé de ce réseau, le modèle annoncé par l'appareil et les coûts de lien mesurés par les routeurs apparaîtraient ici. Ajoute la clé dans les Réglages.",

@@ -21,6 +21,7 @@ from . import crypto
 
 ZCL_BASIC_CLUSTER = 0x0000
 ATTR_MANUFACTURER, ATTR_MODEL, ATTR_POWER_SOURCE = 0x0004, 0x0005, 0x0007
+ATTR_APP_VERSION, ATTR_DATE_CODE, ATTR_SW_BUILD = 0x0001, 0x0006, 0x4000
 POWER_SOURCE = {0: "unknown", 1: "mains", 2: "mains", 3: "battery", 4: "rechargeable"}
 POWER_CONFIG_CLUSTER = 0x0001
 ATTR_BATTERY_VOLTAGE, ATTR_BATTERY_PERCENT = 0x0020, 0x0021
@@ -207,6 +208,9 @@ def _basic_identity(attrs: dict) -> dict | None:
     if isinstance(attrs.get(ATTR_MANUFACTURER), str): out["manufacturer"] = attrs[ATTR_MANUFACTURER]
     if isinstance(attrs.get(ATTR_MODEL), str): out["model"] = attrs[ATTR_MODEL]
     if isinstance(attrs.get(ATTR_POWER_SOURCE), int): out["power"] = POWER_SOURCE.get(attrs[ATTR_POWER_SOURCE] & 0x7F, "unknown")
+    if isinstance(attrs.get(ATTR_SW_BUILD), str): out["sw"] = attrs[ATTR_SW_BUILD]
+    if isinstance(attrs.get(ATTR_DATE_CODE), str): out["date"] = attrs[ATTR_DATE_CODE]
+    if isinstance(attrs.get(ATTR_APP_VERSION), int): out["appVer"] = attrs[ATTR_APP_VERSION]
     return out or None
 
 
@@ -296,7 +300,7 @@ def build_transport_key(link_key: bytes, *, seq: int, pan: int, mac_dst: int, ma
     return mac + nwk + aps + aux + ct
 
 
-def zcl_basic_response(manufacturer: str, model: str, power: int = 3, *, src_ep: int = 1, seq: int = 1) -> bytes:
+def zcl_basic_response(manufacturer: str, model: str, power: int = 3, *, sw: str = "", src_ep: int = 1, seq: int = 1) -> bytes:
     """An APS-data payload: a ZCL Read-Attributes-Response on the Basic cluster."""
     def attr(attr_id: int, dtype: int, value: bytes) -> bytes:
         return attr_id.to_bytes(2, "little") + bytes([0x00, dtype]) + value
@@ -304,6 +308,8 @@ def zcl_basic_response(manufacturer: str, model: str, power: int = 3, *, src_ep:
     body += attr(ATTR_MANUFACTURER, 0x42, bytes([len(manufacturer)]) + manufacturer.encode())
     body += attr(ATTR_MODEL, 0x42, bytes([len(model)]) + model.encode())
     body += attr(ATTR_POWER_SOURCE, 0x30, bytes([power]))
+    if sw:
+        body += attr(ATTR_SW_BUILD, 0x42, bytes([len(sw)]) + sw.encode())
     aps = bytes([0x00, 0x01]) + ZCL_BASIC_CLUSTER.to_bytes(2, "little") + (0x0104).to_bytes(2, "little") + bytes([src_ep, seq & 0xFF])
     return aps + body
 

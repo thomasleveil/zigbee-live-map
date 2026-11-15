@@ -300,6 +300,8 @@
   "card.costs": "Link costs this router measures",
   "card.costRow": "in {in}/7 · out {out}/7",
   "card.battery": "Battery",
+  "card.firmware": "Firmware",
+  "card.appver": "App version",
   "detail.clear": "Without the network key",
   "detail.keyed": "Thanks to the network key",
   "detail.keyless": "With this network's key, the model the device announces and the link costs the routers measure would appear here. Add the key in Settings.",

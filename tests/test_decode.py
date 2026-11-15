@@ -27,6 +27,14 @@ def test_identify_reads_manufacturer_and_model_from_decrypted_basic():
     assert decode.identify(frame, bytes(16)) is None   # wrong key: nothing
 
 
+def test_identify_reads_firmware_build_when_present():
+    payload = decode.zcl_basic_response("SONOFF", "TRVZB", power=3, sw="500+TZSKT31BS102")
+    frame = decode.build_secured_nwk(NET, seq=6, pan=0x1a62, mac_dst=0x0000, mac_src=0x3388,
+                                     nwk_dst=0x0000, nwk_src=0x3388, radius=30, nwk_seq=6,
+                                     src64=DEV64, counter=50, payload=payload)
+    assert decode.identify(frame, NET) == {"manufacturer": "SONOFF", "model": "TRVZB", "power": "battery", "sw": "500+TZSKT31BS102"}
+
+
 def test_link_costs_are_decoded_per_neighbour():
     frame = decode.build_link_status(NET, pan=0x1a62, src=0x6ca5, src64=DEV64, counter=9,
                                      neighbours=[(0x0000, 1, 1), (0x29e5, 3, 5)])
