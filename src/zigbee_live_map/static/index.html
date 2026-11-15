@@ -405,7 +405,20 @@ function spawn(e, ms, md, toAll) {
 
 // ------------------------------------------------------------------ layout physics
 // Devices that often have to repeat themselves to each other are pushed apart: the worse the link, the longer the spring.
-const stretch = p => rated(p) ? 1 + Math.min(1.3, retryRate(p) * 4.5) : 1;
+// The mesh's own neighbour cost (1 best … 7 worst), from decrypted Link Status, worst of both directions.
+function costBetween(a, b) {
+  let worst = 0;
+  const scan = (rows, target) => { if (rows) for (const r of rows) if (r.addr === target) worst = Math.max(worst, r.incoming || 0, r.outgoing || 0); };
+  scan(S.costs[a], b); scan(S.costs[b], a);
+  return worst || null;
+}
+// How far apart to push two nodes: the decrypted cost when the key gives it, else the passive retry rate.
+function stretch(a, b) {
+  const cost = costBetween(a, b);
+  if (cost != null) return 1 + Math.min(1.3, (cost - 1) / 6 * 1.3);
+  const p = S.pairs.get(pairKey(a, b));
+  return rated(p) ? 1 + Math.min(1.3, retryRate(p) * 4.5) : 1;
+}
 let drag = null;
 function physics(dt) {
   const ns = [...S.nodes.values()], step = Math.min(2, dt * 60);
@@ -417,11 +430,11 @@ function physics(dt) {
     a.fx -= dx * f; a.fy -= dy * f; b.fx += dx * f; b.fy += dy * f;
   }
   const spring = (a, b, len, k) => { const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 1, f = k * (d - len); a.fx += dx / d * f; a.fy += dy / d * f; b.fx -= dx / d * f; b.fy -= dy / d * f; };
-  for (const n of ns) if (n.parent && S.nodes.has(n.parent)) spring(n, S.nodes.get(n.parent), 85 * stretch(S.pairs.get(pairKey(n.addr, n.parent))), .035);
+  for (const n of ns) if (n.parent && S.nodes.has(n.parent)) spring(n, S.nodes.get(n.parent), 85 * stretch(n.addr, n.parent), .035);
   for (const l of S.links.values()) {
     const a = S.nodes.get(l.a), b = S.nodes.get(l.b); if (!a || !b) continue;
     const leaf = (a.zed && !a.router) || (b.zed && !b.router);
-    spring(a, b, (leaf ? 95 : 190) * stretch(S.pairs.get(pairKey(l.a, l.b))), leaf ? .02 : .012);
+    spring(a, b, (leaf ? 95 : 190) * stretch(l.a, l.b), leaf ? .02 : .012);
   }
   for (const n of ns) {
     const g = n.addr === "0x0000" ? .05 : .006; n.fx -= n.x * g; n.fy -= n.y * g;
