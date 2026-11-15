@@ -226,6 +226,7 @@ class LiveSource:
         pcap = open(self.pcap_path, "wb") if self.pcap_path else None
         if pcap:
             pcap.write(sniffer.pcap_header())
+            pcap.flush()
         try:
             while not self._stop.is_set():
                 self._retune.clear()
@@ -243,6 +244,7 @@ class LiveSource:
                             now = time.time()
                             if pcap:
                                 pcap.write(sniffer.pcap_record(now, frame))
+                                pcap.flush()   # so the capture is readable while the tool is still running
                             self._post("frame", generation, now, frame, rssi)
                 except (sniffer.SnifferError, usb.core.USBError) as exc:
                     self._post("status", generation, "absent", str(exc))
