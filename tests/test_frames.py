@@ -73,3 +73,22 @@ def test_truncated_and_garbage_frames_never_raise():
         assert zf.Classifier().event(good[:cut], 0.0)["cat"] in {"other", "ack", "data_direct", "data_multihop"}
     assert classify(b"")["cat"] == "other"
     assert classify(bytes(range(40)))["cat"] in {"other", "ack", "mac_cmd"}
+
+
+def test_retransmission_is_the_same_bytes_again():
+    clf = zf.Classifier()
+    frame = nwk(COORD, ROUTER)
+    first, again = clf.event(frame, 10.0), clf.event(frame, 10.004)
+    later = clf.event(frame, 12.0)
+    other = clf.event(nwk(COORD, ROUTER), 12.001)
+    assert "rt" not in first and again["rt"] == 1
+    assert "rt" not in later and "rt" not in other
+
+
+def test_nwk_sequence_number_identifies_a_message_across_hops():
+    assert classify(nwk(COORD, ROUTER, nwk_src=CHILD, nwk_seq=77))["q"] == 77
+
+
+def test_ack_frame_pending_bit():
+    assert zf.Classifier().event(zf.build_ack(1, pending=True), 0.0)["fp"] == 1
+    assert "fp" not in zf.Classifier().event(zf.build_ack(1), 0.0)

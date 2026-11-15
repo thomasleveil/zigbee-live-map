@@ -51,7 +51,7 @@ def parse(frame: bytes) -> dict:
     fcf = int.from_bytes(frame[0:2], "little")
     ftype, ack_req, pan_comp = fcf & 7, bool(fcf & 0x20), bool(fcf & 0x40)
     dst_mode, src_mode = (fcf >> 10) & 3, (fcf >> 14) & 3
-    out.update(seq=frame[2], ack_req=ack_req)
+    out.update(seq=frame[2], ack_req=ack_req, pending=bool(fcf & 0x10))
     if ftype == 2:
         out["kind"] = "ack"
         return out
@@ -128,6 +128,7 @@ class Classifier:
     def __init__(self) -> None:
         self.count = 0
         self._awaiting_ack: dict | None = None
+        self._last_sent: dict[str, tuple[bytes, float]] = {}
 
     def event(self, frame: bytes, ts: float, rssi: int | None = None) -> dict:
         self.count += 1
@@ -141,6 +142,8 @@ class Classifier:
             waiting = self._awaiting_ack
             if waiting and waiting["seq"] == p["seq"]:
                 ev["ms"], ev["md"] = waiting["dst"], waiting["src"]
+            if p["pending"]:  # the parent has more for this child: its indirect queue is not empty
+                ev["fp"] = 1
             return ev
         if kind == "bad":
             return ev
@@ -149,6 +152,11 @@ class Classifier:
                 ev[key] = p[src_key]
         if p["ack_req"] and "msrc" in p and p.get("mdst") not in (None, "0xffff"):
             self._awaiting_ack = {"seq": p["seq"], "src": p["msrc"], "dst": p["mdst"]}
+            # A MAC retransmission is the very same bytes again: the sender did not get its acknowledgement.
+            previous = self._last_sent.get(p["msrc"])
+            if previous and previous[0] == frame and 0 <= ts - previous[1] < 1.0:
+                ev["rt"] = 1
+            self._last_sent[p["msrc"]] = (frame, ts)
         if kind == "beacon":
             ev["cat"] = "beacon"
             ev["bcn"] = p["beacon"]
@@ -163,7 +171,7 @@ class Classifier:
 
     @staticmethod
     def _classify_nwk(ev: dict, nwk: dict) -> None:
-        ev.update(ns=nwk["src"], nd=nwk["dst"], r=nwk["radius"])
+        ev.update(ns=nwk["src"], nd=nwk["dst"], r=nwk["radius"], q=nwk["seq"])
         if "sec64" in nwk:
             ev["ieee"] = nwk["sec64"]
         if "relays" in nwk:
@@ -196,8 +204,8 @@ def _ieee(addr: str) -> bytes:
     return bytes(reversed(bytes.fromhex(addr.replace(":", ""))))
 
 
-def build_ack(seq: int) -> bytes:
-    return bytes([0x02, 0x00, seq & 0xFF])
+def build_ack(seq: int, pending: bool = False) -> bytes:
+    return bytes([0x12 if pending else 0x02, 0x00, seq & 0xFF])
 
 
 def build_poll(seq: int, pan: str, parent: str, child: str) -> bytes:
