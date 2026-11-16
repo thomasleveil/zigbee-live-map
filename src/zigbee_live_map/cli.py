@@ -1,4 +1,4 @@
-"""Command line: zigbee-live-map [--channel N | --demo | --replay FILE | --scan | --import-devices FILE | --update-vendors]"""
+"""Command line: zigbee-live-map [--channel N | --demo | --replay FILE | --scan | --import-devices FILE | --update-vendors] [--host HOST ...]"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-from . import __version__
+from . import __version__, access
 from .devices import DEFAULT_LIST_NAME, DeviceError, DeviceStore
 
 DEFAULT_DATA_DIR = "~/.zigbee-live-map"
@@ -18,12 +18,15 @@ EPILOG = """examples:
   zigbee-live-map --replay capture.pcap   replay a capture with its original timing
   zigbee-live-map --import-devices devices.csv --list Home
                                           load device names exported from your hub
+  ZLM_PASSWORD=... zigbee-live-map --host 0.0.0.0
+                                          reachable on your network, behind a password
 """
 
 
 def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="zigbee-live-map", description="Live animated map of a Zigbee network from a passive sniffer.",
-                                 epilog=EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
+                                 epilog=EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter,
+                                 allow_abbrev=False)   # so that "--password SECRET" is an error, not a short form of --password-file
     ap.add_argument("--version", action="version", version=__version__)
     source = ap.add_argument_group("source")
     source.add_argument("--channel", type=int, default=11, metavar="N", help="Zigbee channel, 11 to 26 (default 11); also changeable from the page")
@@ -37,7 +40,12 @@ def parser() -> argparse.ArgumentParser:
     tools.add_argument("--list", metavar="NAME", default=DEFAULT_LIST_NAME, help=f'list used by --import-devices, created if missing (default "{DEFAULT_LIST_NAME}")')
     tools.add_argument("--update-vendors", action="store_true", help="download the current IEEE registry of chip makers, and exit")
     web = ap.add_argument_group("page")
-    web.add_argument("--port", type=int, default=8765, help="local port (default 8765)")
+    web.add_argument("--host", default=access.Access.host, metavar="HOST", help="address to listen on (default 127.0.0.1: this computer only; 0.0.0.0: your network, "
+                     f"which needs a password: set {access.PASSWORD_ENV} or use --password-file)")
+    web.add_argument("--port", type=int, default=8765, help="port (default 8765)")
+    web.add_argument("--password-file", metavar="FILE", help=f"file whose first line is the password for a network bind (or set {access.PASSWORD_ENV}; never given on the command line)")
+    web.add_argument("--allowed-host", action="append", default=[], metavar="NAME", help="a host name the page may be reached by, e.g. behind a reverse proxy (repeatable; with or without :port)")
+    web.add_argument("--ingress", action="store_true", help="accept Home Assistant's ingress proxy (172.30.32.2) without a login; for running as an add-on")
     web.add_argument("--open", action="store_true", help="open the page in your browser")
     web.add_argument("--data-dir", default=DEFAULT_DATA_DIR, metavar="DIR", help=f"where your device lists and registry updates are kept (default {DEFAULT_DATA_DIR})")
     web.add_argument("--focus", metavar="IEEE", help="start with this device watched (same as the Watch button in the page)")
@@ -108,10 +116,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.channel not in range(11, 27):
         print("error: --channel must be between 11 and 26", file=sys.stderr)
         return 2
+    try:
+        settings = access.from_args(args)
+    except access.AccessError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     from . import server
 
     try:
-        asyncio.run(server.serve(args))
+        asyncio.run(server.serve(args, settings))
     except KeyboardInterrupt:
         pass
     except OSError as exc:

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zigbee live map</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="static/common.css">
+<script src="static/common.js"></script>
+<style>
+/* Borders of the controls use --muted, not --line: they have to reach 3:1 against the card in both themes. */
+main { max-width: 26rem; margin: 0 auto; padding: 2.5rem 1rem 3rem; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1.4rem; }
+.card h1 { font-size: 1.35rem; margin-bottom: .6rem; }
+.card p { margin: 0 0 1rem; }
+.card label { display: block; font-weight: 600; margin-bottom: .3rem; }
+.card input[type="password"] { width: 100%; border-color: var(--muted); padding: .5rem .6rem; }
+.card button { border-color: var(--muted); font-weight: 600; padding: .5rem 1.1rem; margin-top: 1rem; }
+.error { margin: 0 0 1rem; padding: .55rem .8rem; border-left: 4px solid var(--bad); background: var(--panel2); color: var(--ink); }
+.error b { color: var(--bad); }
+main:not([data-state="failed"]) .error { display: none; }
+</style>
+</head>
+<body>
+<header class="hud"><span class="brand">Zigbee <i>//</i> <span data-i18n="app.brand2">live map</span></span></header>
+<main data-state="idle">
+  <div class="card">
+    <h1 data-i18n="login.title">Sign in</h1>
+    <p class="note" data-i18n="login.intro">This map shows the radio traffic of your network. Enter the password this server was started with.</p>
+    <p class="error" id="loginError" role="alert"><b data-i18n="login.error">That password was not accepted. If you have tried several times, wait a minute before trying again.</b></p>
+    <form method="post" action="login">
+      <label for="password" data-i18n="login.password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" autofocus required aria-invalid="false" aria-describedby="loginError">
+      <button type="submit" data-i18n="login.submit">Sign in</button>
+    </form>
+  </div>
+</main>
+<script>ZLM.init();</script>
+</body>
+</html>

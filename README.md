@@ -67,6 +67,26 @@ channel  frames  best RSSI  PAN ids (frames)
 
 Your hub also shows the channel in its settings. You can change channel from the page at any time: the map starts over on the new one.
 
+## Running it on your LAN
+
+By default the page answers on `127.0.0.1`, this computer only. To reach it from a phone, a tablet or another computer, or to run it as a Home Assistant add-on, the same server can listen elsewhere. Its pages carry secrets (your network keys, live radio traffic), so the way you expose it matters. There are three situations.
+
+**1. This computer only (the default).** Nothing to set up. Only a program on this computer can connect, a request must be addressed to `127.0.0.1` or `localhost`, and a web site you visit cannot use your browser to read or change anything (no cross-origin permission is ever given, and every change and the live connection carry a token only the tool's own page can read). This protects you from the web, not from another user of this computer.
+
+**2. Your LAN, with a password.** Listen on an address your network can reach and set a password. The password never goes on the command line, where any user could read it in the process list: it comes from the `ZLM_PASSWORD` environment variable, or from the first line of a file.
+
+```sh
+ZLM_PASSWORD='a long phrase you invented' zigbee-live-map --host 0.0.0.0 --channel 15
+# or
+zigbee-live-map --host 0.0.0.0 --channel 15 --password-file ~/.zigbee-live-map-password
+```
+
+`--host 0.0.0.0` listens on every network interface; give one address instead (`--host 192.168.1.20`) to listen on that one only. A non-loopback bind without a password (or `--ingress`) refuses to start, so it cannot be left open by mistake, and an empty password is refused. Every page, every call and the live connection then require signing in, except the login page, the static files and the translations. A browser signs in once and receives a random session cookie (HttpOnly, SameSite=Strict), kept in memory on the server: restarting the tool signs everybody out, and *Sign out* in *Settings* ends the session. Wrong passwords are slowed down: after three misses in a row from one address, each further miss doubles the wait, up to a minute, and a wait is refused without even looking at the password; one counter over all addresses covers an attacker with many. The tool also checks that each request is addressed to the address it was reached at, which stops DNS rebinding; to reach it by a name (`zigbee.home.example`), say so with `--allowed-host zigbee.home.example` (repeatable, with or without `:port`).
+
+**LAN traffic is plain HTTP.** The password, the session cookie, the network keys and the live traffic cross your network unencrypted: anyone who can see the traffic of your network (someone on the same Wi-Fi, a compromised device) can read them and take over the session. That is acceptable on a home network you trust. On a network you do not trust, put a reverse proxy that terminates TLS in front of the tool, keep the tool itself on a loopback address or a private interface, and name the host the proxy forwards with `--allowed-host`. Native TLS is not built.
+
+**3. Behind Home Assistant ingress.** As an add-on, Home Assistant signs the user in and proxies the page; the tool asks for no password. Start it with `--ingress` and `--host 0.0.0.0`: it then accepts Home Assistant's supervisor (`172.30.32.2`, the only address ingress connects from; it is a constant, nothing changes it) without a login, and answers every other peer as in situation 2. With `--ingress` and no password, every other peer is refused outright. The tool never trusts a header such as `X-Ingress-Path` or `X-Forwarded-For`: a request is "from the supervisor" only if the connection itself is. Home Assistant shows the page in a frame, so the ingress pages can be framed; in the other two situations they cannot be framed by another site. The pages use relative URLs only, so they work under the path prefix ingress adds. The add-on packaging itself is not built yet (see `TODO.md`).
+
 ## Device names
 
 Zigbee devices do not know that they are called "Kitchen plug". That name exists only in your hub's database and is never transmitted, so a sniffer cannot discover it. What travels in clear is the short address and the factory IEEE address of each device.
@@ -88,7 +108,7 @@ Lists export as JSON (to move them to another computer) or CSV.
 
 ### Chip maker
 
-The first bytes of an IEEE address are a prefix that the IEEE assigns to a company, so the tool can name who made the radio chip of every device it hears. That is the chip or module maker, often not the brand on the box: sensors from different brands frequently share one chip vendor. The product model is announced inside the encrypted part of the traffic, which this tool does not read; if your hub export has a model column, it is imported with the names.
+The first bytes of an IEEE address are a prefix that the IEEE assigns to a company, so the tool can name who made the radio chip of every device it hears. That is the chip or module maker, often not the brand on the box: sensors from different brands frequently share one chip vendor. The product model is announced inside the encrypted part of the traffic, which this tool reads only once the network key is known (see [Device names](#device-names)); if your hub export has a model column, it is imported with the names.
 
 A snapshot of the [IEEE registry](https://standards-oui.ieee.org/) ships with the tool. Update it from *Settings*, or with `zigbee-live-map --update-vendors`. This downloads three public files and sends nothing about your network. It never happens on its own.
 
@@ -142,9 +162,15 @@ zigbee-live-map [--channel N | --demo | --replay PCAP] [options]
   --update-vendors       download the current IEEE registry of chip makers, exit
   --data-dir DIR         where your lists and registry updates are kept (default ~/.zigbee-live-map)
   --focus IEEE           start with this device watched (same as the Watch button)
-  --port N               local port (default 8765)
+  --host HOST            address to listen on (default 127.0.0.1, this computer only; 0.0.0.0 for your network)
+  --port N               port (default 8765)
+  --password-file FILE   first line of FILE is the password for a network bind (or set ZLM_PASSWORD)
+  --allowed-host NAME    a host name the page may be reached by, e.g. behind a reverse proxy (repeatable)
+  --ingress              accept Home Assistant's ingress proxy (172.30.32.2) without a login
   --open                 open the page in your browser
 ```
+
+A bind on anything but a loopback address needs a password (`ZLM_PASSWORD` or `--password-file`) or `--ingress`; see [Running it on your LAN](#running-it-on-your-lan). With `--host 0.0.0.0` the start-up line prints the address for this computer (`http://127.0.0.1:PORT/`), and `--open` opens that one.
 
 Language, theme and animations are set from *Settings* in the page and remembered by your browser. Language and theme default to automatic: your browser's language when a translation exists, English otherwise, and your system's light or dark setting.
 
@@ -152,10 +178,10 @@ Language, theme and animations are set from *Settings* in the page and remembere
 
 ```
 CC2531 sniffer ──USB──▶ sniffer.py ──frames──▶ frames.py ──events──▶ server.py ──WebSocket──▶ page
-  (receive only)        (libusb)             (header decoding)       (127.0.0.1)          (canvas)
+  (receive only)        (libusb)             (header decoding)       (--host)             (canvas)
 ```
 
-Two layers of a Zigbee frame are readable by anyone in radio range, and this is all the tool uses:
+Two layers of a Zigbee frame are readable by anyone in radio range, and they are all the tool uses without a network key (see [Scope and privacy](#scope-and-privacy) for what a key adds):
 
 - the **MAC header** (IEEE 802.15.4): which device transmits this radio hop, and to whom;
 - the **NWK header** (Zigbee): who wrote the message, who it is finally for, how many hops are left, a sequence number, and the IEEE address of the device that secured this hop.
@@ -167,8 +193,8 @@ The header decoder has no dependency beyond the standard library. Its output was
 ## Scope and privacy
 
 - **Receive only.** The sniffer firmware cannot transmit, and this tool never sends anything on the radio.
-- **Headers only.** Everything after the NWK header is encrypted with your network key. The tool does not ask for the key and does not decrypt. It shows who talks to whom, when and how much, never what is said. Network commands are recognised by their shape and labelled "probable" when that is a deduction.
-- **Local only.** The server listens on `127.0.0.1` and answers only requests addressed to that local address. It grants no cross-origin access, so another website cannot read anything through your browser, and it refuses any change or live connection that does not carry a token only its own page can obtain. The only outbound connections are the registry update, and your Hue Bridge once you set it up (see [Hue Bridge](#hue-bridge)): the first on your request, the second only to a bridge on your own network. Without a bridge set up, and in `--demo`, the tool contacts none.
+- **What it reads.** Without a network key, only the two clear layers described above: who talks to whom, when and how much, never what is said. One exception, which is a test and not a decryption of your traffic: when a device joins a network that still uses Zigbee's well-known default link key, the key exchange of that join can be read by anyone in range, and the tool recovers the network key from it, says that the network is exposed, and keeps the key in memory. With a network key (that one, or one you enter in *Settings*; keys you save are kept in `keys.json` in your data directory, readable by you only), it decrypts the network layer and reads a few things devices say about themselves: manufacturer, model, power source and firmware (the Basic cluster), battery level, and each router's measured link costs to its neighbours. It shows nothing else from inside the messages: no commands, no sensor readings. Network commands are recognised by their shape and labelled "probable" when that is a deduction.
+- **Local by default.** Out of the box the server listens on `127.0.0.1` and answers only requests addressed to that local address. It grants no cross-origin access, so another website cannot read anything through your browser, and it refuses any change or live connection that does not carry a token only its own page can obtain. You can make it listen on your network (`--host`): it then requires a password and checks the address each request is meant for, or, behind Home Assistant ingress, accepts only the Home Assistant supervisor. That traffic is plain HTTP, see [Running it on your LAN](#running-it-on-your-lan). The only outbound connections are the registry update, and your Hue Bridge once you set it up (see [Hue Bridge](#hue-bridge)): the first on your request, the second only to a bridge on your own network. Without a bridge set up, and in `--demo`, the tool contacts none.
 - **Your data stays out of the repository.** Device lists live in your home directory, and `*.pcap` is in `.gitignore`. A capture contains your devices' addresses: think before sharing one.
 - Traffic of a neighbouring network on the same channel is recognised by its PAN id and kept off the map. Use this on networks you own or are allowed to monitor.
 

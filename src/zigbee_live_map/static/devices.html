@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Zigbee live map</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/static/common.css">
-<script src="/static/common.js"></script>
+<link rel="stylesheet" href="static/common.css">
+<script src="static/common.js"></script>
 <style>
 main { max-width: 1280px; margin: 0 auto; padding: 1.2rem 1rem 3rem; }
 main > p { max-width: 60rem; }
@@ -44,7 +44,7 @@ input[type="file"] { max-width: 100%; }
 <header class="hud">
   <h1 class="brand">Zigbee <i>//</i> <span data-i18n="dev.title"></span></h1>
   <span class="grow"></span>
-  <a class="btn" href="/" data-i18n="nav.map"></a>
+  <a class="btn" href="./" data-i18n="nav.map"></a>
   <button type="button" id="btnSettings" data-i18n="nav.settings"></button>
 </header>
 <main>
@@ -128,7 +128,7 @@ async function call(method, url, body, done) {
   } catch (err) { flash(t("dev.error", { error: err.message }), true); return null; }
 }
 async function load() {
-  data = await getJson("/api/lists");
+  data = await getJson("api/lists");
   if (!data.lists.some(l => l.id === current)) current = data.lists.length ? data.lists[0].id : null;
   render();
 }
@@ -149,7 +149,7 @@ function render() {
   const list = currentList(); $("listPanel").hidden = !list;
   if (list) {
     $("listTitle").textContent = list.name; $("listName").value = list.name; $("listEnabled").checked = list.enabled;
-    $("exportJson").href = `/api/lists/${encodeURIComponent(list.id)}/export?format=json`; $("exportCsv").href = `/api/lists/${encodeURIComponent(list.id)}/export?format=csv`;
+    $("exportJson").href = `api/lists/${encodeURIComponent(list.id)}/export?format=json`; $("exportCsv").href = `api/lists/${encodeURIComponent(list.id)}/export?format=csv`;
     const rows = $("rows"); rows.innerHTML = "";
     const entries = Object.entries(list.devices).sort((a, b) => (a[1].name || "").localeCompare(b[1].name || ""));
     $("empty").hidden = entries.length > 0;
@@ -162,10 +162,10 @@ function render() {
         <td>${esc(vendor(ieee))}</td>
         <td class="actions"><button type="button" class="save">${esc(t("dev.save"))}</button><button type="button" class="remove">${esc(t("dev.remove"))}</button></td>`;
       const [name, model, nwk] = tr.querySelectorAll("input");
-      const save = () => call("PUT", `/api/lists/${encodeURIComponent(list.id)}/devices/${encodeURIComponent(ieee)}`, { name: name.value, model: model.value, nwk: nwk.value });
+      const save = () => call("PUT", `api/lists/${encodeURIComponent(list.id)}/devices/${encodeURIComponent(ieee)}`, { name: name.value, model: model.value, nwk: nwk.value });
       tr.querySelector(".save").addEventListener("click", save);
       for (const input of [name, model, nwk]) input.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); save(); } });
-      tr.querySelector(".remove").addEventListener("click", () => call("DELETE", `/api/lists/${encodeURIComponent(list.id)}/devices/${encodeURIComponent(ieee)}`, undefined, () => t("dev.removed")));
+      tr.querySelector(".remove").addEventListener("click", () => call("DELETE", `api/lists/${encodeURIComponent(list.id)}/devices/${encodeURIComponent(ieee)}`, undefined, () => t("dev.removed")));
       rows.appendChild(tr);
     }
   }
@@ -181,7 +181,7 @@ function render() {
       <td><input type="text" id="${id}" maxlength="60" aria-label="${esc(t("dev.nameIt", { ieee: h.ieee }))}"></td>
       <td class="actions"><button type="button">${esc(t("dev.addButton"))}</button></td>`;
     const input = tr.querySelector("input");
-    const add = () => { if (input.value.trim()) call("PUT", `/api/lists/${encodeURIComponent(list.id)}/devices/${encodeURIComponent(h.ieee)}`, { name: input.value, nwk: h.nwk }); };
+    const add = () => { if (input.value.trim()) call("PUT", `api/lists/${encodeURIComponent(list.id)}/devices/${encodeURIComponent(h.ieee)}`, { name: input.value, nwk: h.nwk }); };
     tr.querySelector("button").addEventListener("click", add);
     input.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); add(); } });
     heard.appendChild(tr);
@@ -190,28 +190,28 @@ function render() {
 
 $("newList").addEventListener("submit", async ev => {
   ev.preventDefault(); const name = $("newListName").value;
-  const made = await call("POST", "/api/lists", { name });
+  const made = await call("POST", "api/lists", { name });
   if (made) { current = made.id; $("newListName").value = ""; render(); }
 });
 $("fillBtn").addEventListener("click", ev => {
   if (ev.currentTarget.getAttribute("aria-disabled") === "true") return;
-  call("POST", `/api/lists/${encodeURIComponent(current)}/fill-identities`, undefined, r => t("dev.filled", { n: r.added }));
+  call("POST", `api/lists/${encodeURIComponent(current)}/fill-identities`, undefined, r => t("dev.filled", { n: r.added }));
 });
-$("renameList").addEventListener("click", () => call("PATCH", `/api/lists/${encodeURIComponent(current)}`, { name: $("listName").value }));
+$("renameList").addEventListener("click", () => call("PATCH", `api/lists/${encodeURIComponent(current)}`, { name: $("listName").value }));
 $("listName").addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); $("renameList").click(); } });
-$("listEnabled").addEventListener("change", () => call("PATCH", `/api/lists/${encodeURIComponent(current)}`, { enabled: $("listEnabled").checked }));
+$("listEnabled").addEventListener("change", () => call("PATCH", `api/lists/${encodeURIComponent(current)}`, { enabled: $("listEnabled").checked }));
 $("deleteList").addEventListener("click", () => {
   const list = currentList();
-  if (list && confirm(t("dev.deleteListConfirm", { name: list.name, n: Object.keys(list.devices).length }))) call("DELETE", `/api/lists/${encodeURIComponent(list.id)}`, undefined, () => t("dev.removed"));
+  if (list && confirm(t("dev.deleteListConfirm", { name: list.name, n: Object.keys(list.devices).length }))) call("DELETE", `api/lists/${encodeURIComponent(list.id)}`, undefined, () => t("dev.removed"));
 });
 $("addDevice").addEventListener("submit", async ev => {
   ev.preventDefault();
-  const ok = await call("PUT", `/api/lists/${encodeURIComponent(current)}/devices/${encodeURIComponent($("addIeee").value.trim())}`, { name: $("addName").value, model: $("addModel").value });
+  const ok = await call("PUT", `api/lists/${encodeURIComponent(current)}/devices/${encodeURIComponent($("addIeee").value.trim())}`, { name: $("addName").value, model: $("addModel").value });
   if (ok) ev.target.reset();
 });
 $("importFile").addEventListener("change", async ev => {
   const file = ev.target.files[0]; if (!file) return;
-  await call("POST", `/api/lists/${encodeURIComponent(current)}/import`, await file.text(), r => t("dev.imported", { n: r.imported }));
+  await call("POST", `api/lists/${encodeURIComponent(current)}/import`, await file.text(), r => t("dev.imported", { n: r.imported }));
   ev.target.value = "";
 });
 $("btnSettings").addEventListener("click", () => ZLM.openSettings());

@@ -14,18 +14,11 @@ sniffing is one data source among several.
   gives reachability only (`zigbee_connectivity.status`), so the map's link figures stay
   sniffer-derived.
 
-## LAN / Home Assistant deployment (`127.0.0.1` is too restrictive)
+## LAN / Home Assistant deployment
 
-- Configurable bind host (`--host`, default `127.0.0.1`, `0.0.0.0` for an add-on).
-- Replace the localhost-only guard: today the whole protection is "Host is `127.0.0.1`/
-  `localhost` + session token + no CORS". On a LAN IP/hostname that Host check breaks, so it
-  must become an expected-hosts allowlist, not a hardcoded localhost check.
-- Real authentication once exposed on the LAN:
-  - **Home Assistant ingress** when run as an add-on (HA authenticates and proxies — no
-    password to manage), and
-  - a configurable access token/password for standalone LAN use.
 - Package as a Home Assistant add-on: container + `config.yaml` manifest, and USB sniffer
   dongle passthrough. (Add-on specifics to verify at build time.)
+- Native TLS is not built: on a LAN the tool speaks plain HTTP; a TLS-terminating reverse proxy plus `--allowed-host` is the way to protect it on a network you do not trust.
 
 ## Active probing (parked)
 

@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Zigbee live map</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/static/common.css">
-<script src="/static/common.js"></script>
+<link rel="stylesheet" href="static/common.css">
+<script src="static/common.js"></script>
 <style>
 .app { display: flex; flex-direction: column; height: 100vh; min-height: 44rem; }
 .pill { display: inline-flex; align-items: center; gap: .45rem; padding: .15rem .7rem; border: 1px solid currentColor; border-radius: 999px; font-family: ui-monospace, Menlo, monospace; font-size: .9rem; letter-spacing: .08em; }
@@ -121,7 +121,7 @@
   <span class="stat" data-i18n-title="tip.count"><b id="sNodes">0</b> <span data-i18n="hud.devices"></span></span>
   <span class="verdict" id="verdict" role="status" hidden></span>
   <span class="grow"></span>
-  <a class="btn" href="/devices" data-i18n="nav.devices" data-i18n-title="tip.devices"></a>
+  <a class="btn" href="devices" data-i18n="nav.devices" data-i18n-title="tip.devices"></a>
   <button type="button" id="btnSecurity" data-i18n="nav.security" data-i18n-title="tip.security"></button>
   <button type="button" id="btnSettings" data-i18n="nav.settings" data-i18n-title="tip.settings"></button>
 </header>
@@ -799,7 +799,7 @@ function buildSecurity() {
   secDialog.querySelector("#secSaveKey").addEventListener("click", async () => {
     const s = S.security || {};
     if (!s.key || !s.pan) return;
-    try { const res = await ZLM.getJson(`/api/keys/${encodeURIComponent(s.pan)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: s.key, label: "" }) }); S.security = res.security; secKeyMsg = t("sec.save.done", { pan: s.pan }); }
+    try { const res = await ZLM.getJson(`api/keys/${encodeURIComponent(s.pan)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: s.key, label: "" }) }); S.security = res.security; secKeyMsg = t("sec.save.done", { pan: s.pan }); }
     catch (err) { secKeyMsg = t("sec.key.bad", { error: err.message }); }
     renderSecurity();
   });
@@ -856,7 +856,11 @@ function setNames(names, vendors) {
 }
 async function connect() {
   const token = await ZLM.token(true);   // always a fresh one: the tool may have been restarted
-  ws = new WebSocket(`ws://${location.host}/ws?token=${encodeURIComponent(token)}`);
+  if (!token) { setTimeout(connect, 2000); return; }   // the tool is down, or the login page is taking over
+  const url = new URL("ws", location.href);   // relative to this page: ws or wss as the page is http or https, under any path prefix
+  url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  url.search = "token=" + encodeURIComponent(token);
+  ws = new WebSocket(url);
   ws.onopen = () => { connOpen = true; };
   ws.onclose = () => { connOpen = false; setTimeout(connect, 2000); };
   ws.onmessage = m => {

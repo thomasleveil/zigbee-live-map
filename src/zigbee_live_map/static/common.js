@@ -10,10 +10,17 @@ const ZLM = (() => {
   // Translators can mark **bold** and *italic*; nothing else in a translation is ever treated as HTML.
   const rich = s => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\*(.+?)\*/g, "<i>$1</i>");
   const emit = name => document.dispatchEvent(new CustomEvent(name));
+  // Signed out (the tool was restarted, or the session ended): on a network the password is asked for again. Never from the login page itself.
+  function signedOut(response) {
+    if (response.status !== 401) return false;
+    if (!/\/login$/.test(location.pathname)) location.assign("login");
+    return true;
+  }
   // Changes and the live connection need the session token, which only a page of this tool can read.
-  let tokenPromise = null;
+  // Every URL here is relative, so the pages work at "/" and under any path prefix a reverse proxy adds.
+  let tokenPromise = null, canSignOut = false;
   function token(fresh) {
-    if (fresh || !tokenPromise) tokenPromise = fetch("/api/session", { cache: "no-store" }).then(r => r.json()).then(d => d.token).catch(() => { tokenPromise = null; return ""; });
+    if (fresh || !tokenPromise) tokenPromise = fetch("api/session", { cache: "no-store" }).then(r => signedOut(r) ? {} : r.json()).then(d => { canSignOut = !!d.signOut; return d.token || ""; }).catch(() => { tokenPromise = null; return ""; });
     return tokenPromise;
   }
   async function getJson(url, options = {}) {
@@ -22,6 +29,7 @@ const ZLM = (() => {
     let response = await send(false);
     if (response.status === 403 && changing) response = await send(true);   // the tool was restarted: its token changed
     const data = await response.json().catch(() => ({}));
+    if (signedOut(response)) throw new Error(data.error || "401");
     if (!response.ok) throw new Error(data.error || `${response.status}`);
     return data;
   }
@@ -52,7 +60,7 @@ const ZLM = (() => {
   }
   async function applyLang() {
     lang = resolveLang(prefs.get("lang", "auto"));
-    strings = lang === "en" ? reference : await getJson(`/locales/${lang}.json`).catch(() => reference);
+    strings = lang === "en" ? reference : await getJson(`locales/${lang}.json`).catch(() => reference);
     document.documentElement.lang = lang;
     translate(document);
     emit("zlm:lang");
@@ -110,7 +118,8 @@ const ZLM = (() => {
           <p class="note" id="zlmHueMsg" role="status"></p></section>
         <section><h3 data-i18n="settings.vendors"></h3><p id="zlmVendorStatus" role="status"></p>
           <p><button type="button" id="zlmVendorRefresh" data-i18n="settings.vendors.refresh"></button></p><p class="note" data-i18n="settings.vendors.help"></p></section>
-        <section><h3 data-i18n="settings.devices"></h3><p class="note" data-i18n="settings.devices.help"></p><p><a class="btn" href="/devices" data-i18n="settings.devices.open"></a></p></section>
+        <section id="zlmSignOut" hidden><p class="note" data-i18n="login.signout.help"></p><p><button type="button" id="zlmSignOutBtn" data-i18n="login.signout"></button></p></section>
+        <section><h3 data-i18n="settings.devices"></h3><p class="note" data-i18n="settings.devices.help"></p><p><a class="btn" href="devices" data-i18n="settings.devices.open"></a></p></section>
       </div>`;
     document.body.appendChild(dialog);
     const q = id => dialog.querySelector("#" + id);
@@ -122,7 +131,7 @@ const ZLM = (() => {
     q("zlmVendorRefresh").addEventListener("click", async () => {
       const button = q("zlmVendorRefresh"), status = q("zlmVendorStatus");
       button.disabled = true; status.textContent = t("settings.vendors.refreshing");
-      try { showVendors(await getJson("/api/vendors/refresh", { method: "POST" }), t("settings.vendors.done") + " "); }
+      try { showVendors(await getJson("api/vendors/refresh", { method: "POST" }), t("settings.vendors.done") + " "); }
       catch (err) { status.textContent = t("settings.vendors.failed", { error: err.message }); }
       button.disabled = false;
     });
@@ -130,7 +139,7 @@ const ZLM = (() => {
       ev.preventDefault();
       const pan = q("zlmKeyPan").value.trim(), key = q("zlmKeyVal").value.trim(), label = q("zlmKeyLabel").value.trim();
       try {
-        const res = await getJson(`/api/keys/${encodeURIComponent(pan)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key, label }) });
+        const res = await getJson(`api/keys/${encodeURIComponent(pan)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key, label }) });
         renderKeys(res.keys, res.pan); q("zlmKeyVal").value = ""; q("zlmKeyLabel").value = ""; q("zlmKeyMsg").textContent = t("keys.saved");
       } catch (err) { q("zlmKeyMsg").textContent = t("keys.failed", { error: err.message }); }
     });
@@ -138,17 +147,18 @@ const ZLM = (() => {
     q("zlmHueFind").addEventListener("click", async () => {
       const button = q("zlmHueFind"), msg = q("zlmHueMsg");
       button.disabled = true; msg.textContent = t("hue.finding");
-      try { hueFound = (await getJson("/api/hue/discover", { method: "POST" })).bridges; renderFound(); msg.textContent = hueFound.length ? "" : t("hue.found.none"); }
+      try { hueFound = (await getJson("api/hue/discover", { method: "POST" })).bridges; renderFound(); msg.textContent = hueFound.length ? "" : t("hue.found.none"); }
       catch (err) { msg.textContent = t("hue.failed", { error: err.message }); }
       button.disabled = false;
     });
-    q("zlmHuePair").addEventListener("submit", ev => { ev.preventDefault(); hueCall("/api/hue/pair", "POST", { host: q("zlmHueHost").value }); });
+    q("zlmHuePair").addEventListener("submit", ev => { ev.preventDefault(); hueCall("api/hue/pair", "POST", { host: q("zlmHueHost").value }); });
     q("zlmHueKeyForm").addEventListener("submit", async ev => {
       ev.preventDefault();
-      if (await hueCall("/api/hue/key", "POST", { host: q("zlmHueHost").value, key: q("zlmHueKey").value })) q("zlmHueKey").value = "";
+      if (await hueCall("api/hue/key", "POST", { host: q("zlmHueHost").value, key: q("zlmHueKey").value })) q("zlmHueKey").value = "";
     });
-    q("zlmHueRefresh").addEventListener("click", () => hueCall("/api/hue/refresh", "POST"));
-    q("zlmHueForget").addEventListener("click", () => hueCall("/api/hue", "DELETE"));
+    q("zlmSignOutBtn").addEventListener("click", async () => { try { await getJson("logout", { method: "POST" }); } catch (_) {} location.assign("login"); });
+    q("zlmHueRefresh").addEventListener("click", () => hueCall("api/hue/refresh", "POST"));
+    q("zlmHueForget").addEventListener("click", () => hueCall("api/hue", "DELETE"));
     if (extras) { q("zlmExtras").hidden = false; extras(q("zlmExtras")); }
   }
   // ---- Hue Bridge: the page only ever learns whether a bridge is set up, its name and id, when it was read, and the last error
@@ -176,7 +186,7 @@ const ZLM = (() => {
     clearTimeout(hueTimer);
     if (waiting && dialog.open) hueTimer = setTimeout(pollHue, 1000);   // pairing runs on the server: ask how it is going
   }
-  async function pollHue() { try { renderHue(await getJson("/api/hue")); } catch (_) { hueTimer = setTimeout(pollHue, 2000); } }
+  async function pollHue() { try { renderHue(await getJson("api/hue")); } catch (_) { hueTimer = setTimeout(pollHue, 2000); } }
   async function hueCall(url, method, body) {
     const msg = dialog.querySelector("#zlmHueMsg");
     msg.textContent = "";
@@ -190,7 +200,7 @@ const ZLM = (() => {
     box.innerHTML = list.map(k => `<div class="krow"><span class="kpan">${esc(k.pan)}</span><span class="klabel">${esc(k.label || "")}</span><button type="button" data-pan="${esc(k.pan)}" data-i18n="keys.remove"></button><span class="kval">${esc(k.key)}</span></div>`).join("");
     translate(box);
     for (const b of box.querySelectorAll("button[data-pan]")) b.addEventListener("click", async () => {
-      try { const res = await getJson(`/api/keys/${encodeURIComponent(b.dataset.pan)}`, { method: "DELETE" }); renderKeys(res.keys, res.pan); } catch (_) {}
+      try { const res = await getJson(`api/keys/${encodeURIComponent(b.dataset.pan)}`, { method: "DELETE" }); renderKeys(res.keys, res.pan); } catch (_) {}
     });
   }
   function showVendors(meta, prefix = "") {
@@ -207,14 +217,15 @@ const ZLM = (() => {
   async function openSettings() {
     if (!dialog) buildSettings();
     fillSettings(); dialog.showModal();
-    try { const d = await getJson("/api/keys"); renderKeys(d.keys, d.pan); } catch (_) {}
-    try { showVendors(await getJson("/api/vendors")); } catch (_) {}
-    try { renderHue(await getJson("/api/hue")); } catch (_) {}
+    token().then(() => { dialog.querySelector("#zlmSignOut").hidden = !canSignOut; });   // only a password-protected server has a session to end
+    try { const d = await getJson("api/keys"); renderKeys(d.keys, d.pan); } catch (_) {}
+    try { showVendors(await getJson("api/vendors")); } catch (_) {}
+    try { renderHue(await getJson("api/hue")); } catch (_) {}
   }
   document.addEventListener("zlm:lang", () => { if (dialog) fillSettings(); });
 
   async function init() {
-    try { locales = await getJson("/locales"); reference = await getJson("/locales/en.json"); } catch (_) {}
+    try { locales = await getJson("locales"); reference = await getJson("locales/en.json"); } catch (_) {}
     strings = reference;
     await applyLang();
   }

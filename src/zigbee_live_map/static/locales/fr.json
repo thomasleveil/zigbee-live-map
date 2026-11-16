@@ -381,5 +381,12 @@
   "issues.hue": "{name} : le pont indique que l'appareil est {state}.",
   "issues.hueUnheard": "{name} : le pont indique que l'appareil est {state}, et le sniffer ne l'a jamais entendu.",
   "issues.hueChannel": "Le réseau du pont est sur le canal {bridge}, mais l'outil écoute le canal {sniffer} : les appareils du pont ne peuvent pas être entendus. Change de canal dans l'en-tête.",
-  "issues.hueError": "Le pont Hue n'a pas pu être lu : {error}"
+  "issues.hueError": "Le pont Hue n'a pas pu être lu : {error}",
+  "login.title": "Connexion",
+  "login.intro": "Cette carte montre le trafic radio de votre réseau. Saisissez le mot de passe avec lequel ce serveur a été lancé.",
+  "login.password": "Mot de passe",
+  "login.submit": "Se connecter",
+  "login.error": "Ce mot de passe n'a pas été accepté. Si vous avez essayé plusieurs fois, attendez une minute avant de réessayer.",
+  "login.signout": "Se déconnecter",
+  "login.signout.help": "Termine la session de ce navigateur sur le serveur. À la prochaine visite, le mot de passe sera redemandé."
 }

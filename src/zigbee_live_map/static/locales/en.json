@@ -381,5 +381,12 @@
   "issues.hue": "{name}: the hub reports it as {state}.",
   "issues.hueUnheard": "{name}: the hub reports it as {state}, and the sniffer has never heard it.",
   "issues.hueChannel": "The bridge's network is on channel {bridge}, but this tool is listening on channel {sniffer}: the bridge's devices cannot be heard. Change the channel in the header.",
-  "issues.hueError": "The Hue bridge could not be read: {error}"
+  "issues.hueError": "The Hue bridge could not be read: {error}",
+  "login.title": "Sign in",
+  "login.intro": "This map shows the radio traffic of your network. Enter the password this server was started with.",
+  "login.password": "Password",
+  "login.submit": "Sign in",
+  "login.error": "That password was not accepted. If you have tried several times, wait a minute before trying again.",
+  "login.signout": "Sign out",
+  "login.signout.help": "Ends this browser's session on the server. The next visit asks for the password again."
 }

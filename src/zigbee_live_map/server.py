@@ -1,16 +1,29 @@
-"""Local web server: frames in, events out over a WebSocket, pages to draw and manage them.
+"""Web server: frames in, events out over a WebSocket, pages to draw and manage them.
 
-It listens on 127.0.0.1 only, and a web site you visit must not be able to use your browser to
-read your radio traffic or edit your device lists. Three rules do that:
+The pages carry secrets (network keys, the live traffic), so every request is sorted into exactly one of
+three access channels, decided in one place (`access.Access.channel`) from how the server was started and
+from the address of the TCP connection, never from a header:
 
-- every request must be addressed to the local host name, which stops DNS rebinding;
-- plain reads (GET) are answered without any cross-origin permission, so the browser itself keeps
-  another site from seeing the answer;
-- the live connection and every change must carry a token that is drawn at start-up and handed out
-  by a plain read, which therefore only this tool's own page can obtain.
+- local: the server was started on a loopback address (the default, 127.0.0.1). A web site you visit must
+  not be able to use your browser to read your radio traffic or edit your device lists. Three rules do that:
+  every request must be addressed to the local host name, which stops DNS rebinding; plain reads (GET) are
+  answered without any cross-origin permission, so the browser itself keeps another site from seeing the
+  answer; the live connection and every change must carry a token that is drawn at start-up and handed out
+  by a plain read, which therefore only this tool's own page can obtain. The Origin header is not compared
+  to an exact value: browsers and extensions rewrite it in ways that cannot be predicted (some drop the
+  port). When present it must still name the local host.
+- ingress: started with --ingress, and the peer is the Home Assistant supervisor (172.30.32.2), the only
+  address Home Assistant's ingress proxy connects from. Home Assistant has already signed the user in, so
+  there is no login, and Host and Origin are not checked (behind the proxy they are Home Assistant's). The
+  token is still required for every change and for /ws.
+- lan: every other request on a non-loopback bind, loopback peers included. The Host must be the address of
+  the socket the request arrived on, or an --allowed-host name; every route needs a signed-in session
+  (a random cookie kept in memory) except the login page, its POST, the static files and the locale files;
+  changes and /ws also need the token, and an Origin, when present, must name an allowed host. Without a
+  password (--ingress alone) nobody can sign in, so every lan request is refused.
 
-The Origin header is not compared to an exact value: browsers and extensions rewrite it in ways
-that cannot be predicted (some drop the port). When present it must still name the local host.
+Outside the ingress channel the pages cannot be framed by another site. The pages use relative URLs only,
+so they work at "/" and under any path prefix a reverse proxy puts in front of them.
 """
 
 from __future__ import annotations
@@ -18,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import math
 import re
 import secrets
 import sys
@@ -30,7 +44,8 @@ from urllib.parse import urlsplit
 
 from aiohttp import WSMsgType, web
 
-from . import __version__, crypto, decode, demo, hue as huemod, keys as keystore
+from . import __version__, access as accessmod, crypto, decode, demo, hue as huemod, keys as keystore
+from .access import COOKIE, INGRESS, LAN, LOCAL, Access, LoginGuard, Sessions
 from .devices import DeviceError, DeviceStore
 from .frames import Classifier, read_pcap
 from .hue import HueService
@@ -40,7 +55,8 @@ from .vendors import Registry, VendorError
 STATIC_TYPES = {".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".json": "application/json"}
 STATIC_NAME = re.compile(r"^[a-z0-9_-]+\.(css|js)$")
 LOCALE_CODE = re.compile(r"^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})?$")
-PAGES = {"/": "index.html", "/devices": "devices.html"}
+PAGES = {"/": "index.html", "/devices": "devices.html"}   # what an unauthenticated visitor is sent to the login for
+FRAME_HEADERS = {"X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancestors 'none'"}
 
 
 def _static(name: str) -> str:
@@ -315,37 +331,178 @@ async def pump(queue: asyncio.Queue, hub: Hub) -> None:
 
 HUB = web.AppKey("hub", Hub)
 TOKEN = web.AppKey("token", str)
+ACCESS = web.AppKey("access", Access)
+SESSIONS = web.AppKey("sessions", Sessions)
+GUARD = web.AppKey("login_guard", LoginGuard)
+CHANNEL = web.RequestKey("channel", str)   # which access channel this request fell into
 LOCAL_NAMES = {"127.0.0.1", "localhost"}
+GATE_TEXT = "zigbee-live-map refused this request: {}."
 
-@web.middleware
-async def local_only(request: web.Request, handler):
-    port = request.transport.get_extra_info("sockname")[1]  # the port we really listen on
-    hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
-    origin = request.headers.get("Origin")
-    guarded = request.method not in ("GET", "HEAD") or request.path == "/ws"
+
+def _peer(request: web.Request) -> str | None:
+    """The address of the TCP connection. Never a header: any client can write those."""
+    peer = request.transport.get_extra_info("peername") if request.transport else None
+    return peer[0] if peer else None
+
+
+def _socket(request: web.Request) -> tuple[str, int]:
+    """The address and port of the socket the request arrived on."""
+    name = request.transport.get_extra_info("sockname")
+    return name[0], name[1]
+
+
+def _guarded(request: web.Request) -> bool:
+    """A change, or the live connection: what needs the token."""
+    return request.method not in ("GET", "HEAD") or request.path == "/ws"
+
+
+def _token_ok(request: web.Request) -> bool:
     token = request.headers.get("X-ZLM-Token") or request.query.get("token") or ""
+    return hmac.compare_digest(token, request.app[TOKEN])
+
+
+def _refuse(request: web.Request, reason: str) -> web.HTTPForbidden:
+    print(f"refused {request.method} {request.path}: {reason} (Host: {request.host}, Origin: {request.headers.get('Origin')})", file=sys.stderr, flush=True)
+    return web.HTTPForbidden(text=GATE_TEXT.format(reason))
+
+
+def _unauthorized(request: web.Request) -> web.HTTPException:
+    """Not signed in: a page goes to the login (a relative URL, so it holds under any path prefix), anything else is told 401."""
+    if request.method in ("GET", "HEAD") and request.path in PAGES:
+        return web.HTTPFound("login", headers={"Cache-Control": "no-store"})
+    return web.HTTPUnauthorized(text=json.dumps({"error": "sign in required"}), content_type="application/json", headers={"Cache-Control": "no-store"})
+
+
+# One function per channel holds that channel's rules. Each returns the refusal to raise, or None to let the request through.
+
+def local_rules(request: web.Request) -> web.HTTPException | None:
+    sock_ip, port = _socket(request)   # the port we really listen on
+    mine = accessmod.ip_of(sock_ip)
+    # On the default bind these are exactly 127.0.0.1 and localhost; a bind on ::1 or 127.0.0.2 adds its own address, so it can be reached at all.
+    names = LOCAL_NAMES | ({accessmod.literal(mine).strip("[]")} if mine else set())
+    hosts = {f"127.0.0.1:{port}", f"localhost:{port}"} | ({f"{accessmod.literal(mine)}:{port}"} if mine else set())
+    origin = request.headers.get("Origin")
+    guarded = _guarded(request)
     reason = None
     if request.host not in hosts:
         reason = "it is not addressed to this local server"
-    elif guarded and origin is not None and urlsplit(origin).hostname not in LOCAL_NAMES:
+    elif guarded and origin is not None and urlsplit(origin).hostname not in names:
         reason = "it comes from another site"
-    elif guarded and not hmac.compare_digest(token, request.app[TOKEN]):
+    elif guarded and not _token_ok(request):
         reason = "it does not carry this session's token (reload the page)"
-    if reason:
-        print(f"refused {request.method} {request.path}: {reason} (Host: {request.host}, Origin: {origin})", file=sys.stderr, flush=True)
-        raise web.HTTPForbidden(text=f"zigbee-live-map refused this request: {reason}.")
+    return _refuse(request, reason) if reason else None
+
+
+def ingress_rules(request: web.Request) -> web.HTTPException | None:
+    """Home Assistant signed the user in and proxies for them: no login, and Host and Origin are its own. The token still guards changes."""
+    if _guarded(request) and not _token_ok(request):
+        return _refuse(request, "it does not carry this session's token (reload the page)")
+    return None
+
+
+def lan_rules(request: web.Request) -> web.HTTPException | None:
+    access, sessions = request.app[ACCESS], request.app[SESSIONS]
+    sock_ip, port = _socket(request)
+    origin = request.headers.get("Origin")
+    if not access.host_ok(request.host, sock_ip, port):   # first: before a login, a redirect or a 401 can teach a rebinding page anything
+        return _refuse(request, "it is not addressed to a host this server accepts")
+    if access.password is None:   # --ingress alone: only the supervisor may use the tool
+        return _refuse(request, "this server answers only Home Assistant")
+    if request.method == "POST" and request.path == "/login":   # no session yet, no token yet: but not from another site
+        if origin is not None and not access.origin_ok(origin, sock_ip):
+            return _refuse(request, "it comes from another site")
+        return None
+    path = request.path
+    if request.method in ("GET", "HEAD") and (path in ("/login", "/locales") or path.startswith(("/static/", "/locales/"))):
+        return None
+    if not sessions.valid(request.cookies.get(COOKIE)):
+        return _unauthorized(request)
+    if _guarded(request):
+        if origin is not None and not access.origin_ok(origin, sock_ip):
+            return _refuse(request, "it comes from another site")
+        if not _token_ok(request):
+            return _refuse(request, "it does not carry this session's token (reload the page)")
+    return None
+
+
+CHANNEL_RULES = {LOCAL: local_rules, INGRESS: ingress_rules, LAN: lan_rules}
+
+
+@web.middleware
+async def access_control(request: web.Request, handler):
+    channel = request.app[ACCESS].channel(_peer(request))   # the one place the channel is decided
+    request[CHANNEL] = channel
+    refusal = CHANNEL_RULES[channel](request)
+    if refusal is not None:
+        raise refusal
     try:
         return await handler(request)
     except (DeviceError, VendorError) as exc:
         return web.json_response({"error": str(exc)}, status=400)
 
 
-def _text(body: str, kind: str) -> web.Response:
-    return web.Response(text=body, content_type=STATIC_TYPES[kind], charset="utf-8", headers={"Cache-Control": "no-store"})
+async def _response_headers(request: web.Request, response: web.StreamResponse) -> None:
+    """On every response, refusals and redirects included: only Home Assistant may show the pages in a frame, and the lan's answers are never cached."""
+    channel = request.get(CHANNEL)
+    if channel != INGRESS:
+        response.headers.update(FRAME_HEADERS)
+    if channel == LAN:
+        response.headers.setdefault("Cache-Control", "no-store")
+
+
+def _text(body: str, kind: str, status: int = 200) -> web.Response:
+    return web.Response(text=body, content_type=STATIC_TYPES[kind], charset="utf-8", status=status, headers={"Cache-Control": "no-store"})
 
 
 async def handle_page(request: web.Request) -> web.Response:
     return _text(_static(PAGES[request.path]), ".html")
+
+
+def _login_page(failed: bool = False, status: int = 200) -> web.Response:
+    """The login page. A failed attempt gets the same page with its one message shown, so it also works without JavaScript."""
+    body = _static("login.html")
+    if failed:
+        body = body.replace('data-state="idle"', 'data-state="failed"').replace('aria-invalid="false"', 'aria-invalid="true"')
+    return _text(body, ".html", status)
+
+
+async def handle_login_page(request: web.Request) -> web.Response:
+    if request[CHANNEL] != LAN:
+        raise web.HTTPNotFound()   # nothing to sign in to here
+    if request.app[SESSIONS].valid(request.cookies.get(COOKIE)):
+        raise web.HTTPFound("./")
+    return _login_page()
+
+
+async def handle_login(request: web.Request) -> web.Response:
+    if request[CHANNEL] != LAN:
+        raise web.HTTPNotFound()
+    access, sessions, guard = request.app[ACCESS], request.app[SESSIONS], request.app[GUARD]
+    peer = _peer(request) or ""
+    try:   # the body first: from the gate to the verdict there must be no await, or attempts started together would all pass the gate
+        given = (await request.post()).get("password")
+    except (ValueError, UnicodeError):
+        given = None
+    wait = guard.wait(peer)
+    if wait > 0:   # too soon after failures: refused without looking at the password, so the refusal cannot tell a right guess from a wrong one
+        page = _login_page(failed=True, status=429)
+        page.headers["Retry-After"] = str(math.ceil(wait))
+        return page
+    if not isinstance(given, str) or not access.password_ok(given):
+        guard.failed(peer)
+        return _login_page(failed=True, status=401)
+    guard.succeeded(peer)
+    response = web.Response(status=303, headers={"Location": "./", "Cache-Control": "no-store"})
+    response.set_cookie(COOKIE, sessions.start(), max_age=accessmod.SESSION_TTL, path="/", httponly=True, samesite="Strict",
+                        secure=request.headers.get("X-Forwarded-Proto") == "https")   # behind a TLS proxy the browser must not send it in clear
+    return response
+
+
+async def handle_logout(request: web.Request) -> web.Response:
+    request.app[SESSIONS].end(request.cookies.get(COOKIE))
+    response = web.json_response({})
+    response.del_cookie(COOKIE, path="/")
+    return response
 
 
 async def handle_static(request: web.Request) -> web.Response:
@@ -450,7 +607,7 @@ async def api_export(request: web.Request) -> web.Response:
 
 
 async def api_session(request: web.Request) -> web.Response:
-    return web.json_response({"token": request.app[TOKEN]}, headers={"Cache-Control": "no-store"})
+    return web.json_response({"token": request.app[TOKEN], "signOut": request[CHANNEL] == LAN}, headers={"Cache-Control": "no-store"})
 
 
 async def api_keys(request: web.Request) -> web.Response:
@@ -557,12 +714,18 @@ async def handle_ws(request: web.Request) -> web.StreamResponse:
     return ws
 
 
-def build_app(hub: Hub) -> web.Application:
-    app = web.Application(middlewares=[local_only], client_max_size=2 * 1024 * 1024)
+def build_app(hub: Hub, access: Access | None = None, clock=time.monotonic) -> web.Application:
+    """With no `access` the server is what it always was: loopback only."""
+    app = web.Application(middlewares=[access_control], client_max_size=2 * 1024 * 1024)
     app[HUB] = hub
     app[TOKEN] = secrets.token_urlsafe(24)
+    app[ACCESS] = access if access is not None else Access()
+    app[SESSIONS] = Sessions(clock)
+    app[GUARD] = LoginGuard(clock)
+    app.on_response_prepare.append(_response_headers)
     app.add_routes([
         web.get("/", handle_page), web.get("/devices", handle_page), web.get("/ws", handle_ws),
+        web.get("/login", handle_login_page), web.post("/login", handle_login), web.post("/logout", handle_logout),
         web.get("/static/{name}", handle_static), web.get("/locales", handle_locales), web.get("/locales/{code}.json", handle_locale),
         web.get("/api/lists", api_lists), web.post("/api/lists", api_list_create),
         web.patch("/api/lists/{list}", api_list_update), web.delete("/api/lists/{list}", api_list_delete),
@@ -583,7 +746,8 @@ def demo_store() -> DeviceStore:
     return store
 
 
-async def serve(args) -> None:
+async def serve(args, access: Access | None = None) -> None:
+    access = access if access is not None else accessmod.from_args(args)
     mode = "demo" if args.demo else "replay" if args.replay else "live"
     data_dir = Path(args.data_dir).expanduser()
     store = demo_store() if mode == "demo" else DeviceStore(data_dir)
@@ -601,11 +765,15 @@ async def serve(args) -> None:
         hub.source = LiveSource(asyncio.get_running_loop(), queue, args.channel, args.pcap)
         hub.source.thread.start()
 
-    runner = web.AppRunner(build_app(hub))
+    runner = web.AppRunner(build_app(hub, access))
     await runner.setup()
-    await web.TCPSite(runner, "127.0.0.1", args.port).start()
-    url = f"http://127.0.0.1:{args.port}/"
+    await web.TCPSite(runner, access.host, args.port).start()
+    port = runner.addresses[0][1]   # what the system gave, when the port asked for was 0
+    url = access.url(port)
     print(f"zigbee-live-map {__version__}: {url}  ({mode}{f', channel {args.channel}' if mode == 'live' else ''})", flush=True)
+    if not access.loopback:
+        print(f"  reachable from your network on port {port}, as plain HTTP" + ("; password required" if access.password else "")
+              + ("; Home Assistant ingress accepted" if access.ingress else ""), flush=True)
     if args.open:
         import webbrowser
 
