@@ -13,3 +13,7 @@ build/
 uv.lock
 .DS_Store
 .playwright-mcp/
+
+# Home Assistant app: the wheel is built into the app folder (see homeassistant/try-locally.sh), and the local test's scratch directory
+homeassistant/zigbee_live_map/*.whl
+homeassistant/.try-locally/

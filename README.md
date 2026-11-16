@@ -69,7 +69,7 @@ Your hub also shows the channel in its settings. You can change channel from the
 
 ## Running it on your LAN
 
-By default the page answers on `127.0.0.1`, this computer only. To reach it from a phone, a tablet or another computer, or to run it as a Home Assistant add-on, the same server can listen elsewhere. Its pages carry secrets (your network keys, live radio traffic), so the way you expose it matters. There are three situations.
+By default the page answers on `127.0.0.1`, this computer only. To reach it from a phone, a tablet or another computer, or to run it as a Home Assistant app, the same server can listen elsewhere. Its pages carry secrets (your network keys, live radio traffic), so the way you expose it matters. There are three situations.
 
 **1. This computer only (the default).** Nothing to set up. Only a program on this computer can connect, a request must be addressed to `127.0.0.1` or `localhost`, and a web site you visit cannot use your browser to read or change anything (no cross-origin permission is ever given, and every change and the live connection carry a token only the tool's own page can read). This protects you from the web, not from another user of this computer.
 
@@ -85,7 +85,51 @@ zigbee-live-map --host 0.0.0.0 --channel 15 --password-file ~/.zigbee-live-map-p
 
 **LAN traffic is plain HTTP.** The password, the session cookie, the network keys and the live traffic cross your network unencrypted: anyone who can see the traffic of your network (someone on the same Wi-Fi, a compromised device) can read them and take over the session. That is acceptable on a home network you trust. On a network you do not trust, put a reverse proxy that terminates TLS in front of the tool, keep the tool itself on a loopback address or a private interface, and name the host the proxy forwards with `--allowed-host`. Native TLS is not built.
 
-**3. Behind Home Assistant ingress.** As an add-on, Home Assistant signs the user in and proxies the page; the tool asks for no password. Start it with `--ingress` and `--host 0.0.0.0`: it then accepts Home Assistant's supervisor (`172.30.32.2`, the only address ingress connects from; it is a constant, nothing changes it) without a login, and answers every other peer as in situation 2. With `--ingress` and no password, every other peer is refused outright. The tool never trusts a header such as `X-Ingress-Path` or `X-Forwarded-For`: a request is "from the supervisor" only if the connection itself is. Home Assistant shows the page in a frame, so the ingress pages can be framed; in the other two situations they cannot be framed by another site. The pages use relative URLs only, so they work under the path prefix ingress adds. The add-on packaging itself is not built yet (see `TODO.md`).
+**3. Behind Home Assistant ingress.** As an app, Home Assistant signs the user in and proxies the page; the tool asks for no password. Start it with `--ingress` and `--host 0.0.0.0`: it then accepts Home Assistant's supervisor (`172.30.32.2`, the only address ingress connects from; it is a constant, nothing changes it) without a login, and answers every other peer as in situation 2. With `--ingress` and no password, every other peer is refused outright. The tool never trusts a header such as `X-Ingress-Path` or `X-Forwarded-For`: a request is "from the supervisor" only if the connection itself is. Home Assistant shows the page in a frame, so the ingress pages can be framed; in the other two situations they cannot be framed by another site. The pages use relative URLs only, so they work under the path prefix ingress adds. The app packaging is described in [Home Assistant](#home-assistant).
+
+## Home Assistant
+
+The tool is packaged as a Home Assistant **app** (what used to be called an add-on) in [`homeassistant/zigbee_live_map/`](homeassistant/zigbee_live_map/). It gives you:
+
+- the map inside Home Assistant, in its own sidebar entry, behind Home Assistant's own sign-in (ingress): no password to set, no port opened;
+- the dongle passed to the app, and your lists of known devices and saved keys kept in the app's own data, included in Home Assistant backups;
+- a demo switch, to look at the app before you have a dongle.
+
+**Install it today.** The app is built on your Home Assistant machine from its folder, and the Supervisor uses that folder as the whole build context, so the tool has to arrive in it as a wheel. From a clone of this repository:
+
+```sh
+uv build --wheel --out-dir dist/
+cp dist/zigbee_live_map-*.whl homeassistant/zigbee_live_map/
+```
+
+Copy the folder `homeassistant/zigbee_live_map` (with the wheel inside) into the `local_apps` folder of your Home Assistant, with the Samba share or the *Terminal & SSH* app. Then open *Settings*, *Apps*, *Install app*, run *Check for updates*, and install *Zigbee Live Map* from the *Local apps* section. After a change, use *Rebuild* on the app page, or `ha apps rebuild --force local_zigbee_live_map`. [`repository.yaml`](repository.yaml) is there so that the repository can later be added as an app repository by its URL; it holds a placeholder address until the repository is public.
+
+**Options**, on the app's *Configuration* tab:
+
+| Option | Meaning |
+|---|---|
+| Zigbee channel | 11 to 26 (default 11); ignored in demo mode |
+| Demo network | simulated network, no dongle (default off) |
+| Password | only for a published port, see below |
+| Allowed host names | only for a published port: the names or addresses your browser types, with `:port` if it is not 8099 |
+
+The port is not published by default. To reach the page from outside Home Assistant, enable port 8099 in the app's *Network* section and set a password and allowed host names; that is situation 2 of [Running it on your LAN](#running-it-on-your-lan), plain HTTP included.
+
+**Try it without Home Assistant.** [`homeassistant/try-locally.sh`](homeassistant/try-locally.sh) needs Docker and `uv`. It builds the wheel and the image, creates a Docker network on Home Assistant's internal subnet (`172.30.32.0/23`), starts the app on it with a mounted data directory, and starts a small nginx at `172.30.32.2` (the Supervisor's address) that serves the app under a path prefix like ingress does, HTTP and WebSocket, without a login. It publishes one port on `127.0.0.1` and prints the URL:
+
+```sh
+homeassistant/try-locally.sh          # demo network, http://127.0.0.1:8798/api/hassio_ingress/local/
+ZLM_TRY_DEMO=false homeassistant/try-locally.sh   # the real mode with no dongle: device lists you create are written to the data directory
+homeassistant/try-locally.sh down     # removes the containers, the network, the image and the data directory
+```
+
+Everything it creates is named `zlm-*`; `ZLM_TRY_PORT` changes the host port.
+
+**What has not been tested.**
+
+- **A real Supervisor.** The script stands in for its proxy; it does not check a Home Assistant session, does not apply AppArmor, and does not pass any USB device.
+- **USB passthrough of the dongle.** The app asks for it with `usb: true`, the key the Home Assistant documentation gives for raw access through `/dev/bus/usb`, which is what libusb needs. Whether that key alone lets the app open a CC2531 (`0451:16ae`), and what the default AppArmor profile does to it, is **unverified on hardware**. The image does contain libusb, and its USB backend loads there, but nothing here has talked to a dongle from inside a container.
+- Only the architecture of the machine that built it has been built: `aarch64`. `amd64` is declared, from the documentation, and untested.
 
 ## Device names
 

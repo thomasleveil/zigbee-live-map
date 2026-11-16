@@ -1,7 +1,7 @@
 # TODO
 
 This tool is a **Zigbee network diagnostic tool** meant to run on a home-automation LAN
-(e.g. deployed as a Home Assistant add-on), not a public, passive-only sniffer. Passive
+(e.g. deployed as a Home Assistant app), not a public, passive-only sniffer. Passive
 sniffing is one data source among several.
 
 ## Controller / hub integration
@@ -16,8 +16,12 @@ sniffing is one data source among several.
 
 ## LAN / Home Assistant deployment
 
-- Package as a Home Assistant add-on: container + `config.yaml` manifest, and USB sniffer
-  dongle passthrough. (Add-on specifics to verify at build time.)
+- The Home Assistant app is packaged (`homeassistant/`); what remains:
+  - Test it on a real Supervisor, with the CC2531 plugged in: does `usb: true` alone let pyusb open
+    `0451:16ae` (or is `udev: true`, a custom AppArmor profile or a privileged capability needed)?
+  - Publish a prebuilt multi-arch image (aarch64, amd64) once the repository is public, and set `image`
+    in `config.yaml`: the wheel then no longer has to be built by hand, and the app installs from the repository URL.
+  - Replace the placeholder repository address in `repository.yaml` and `config.yaml`.
 - Native TLS is not built: on a LAN the tool speaks plain HTTP; a TLS-terminating reverse proxy plus `--allowed-host` is the way to protect it on a network you do not trust.
 
 ## Active probing (parked)

@@ -1,0 +1,16 @@
+# Labels for the options form: https://contributors.home-assistant.io/apps/reference/files/
+configuration:
+  channel:
+    name: "Zigbee channel"
+    description: "Channel your Zigbee network uses, 11 to 26. Ignored when the demo is on. It can also be changed from the page."
+  demo:
+    name: "Demo network"
+    description: "Run a simulated network instead of reading the dongle. For trying the app without hardware."
+  password:
+    name: "Password"
+    description: "Only needed if you also publish the port in the Network tab. Through Home Assistant, no password is asked."
+  allowed_hosts:
+    name: "Allowed host names"
+    description: "Only for a published port: the names (or addresses) your browser uses to reach it, such as homeassistant.local. Without them the page refuses the request."
+network:
+  8099/tcp: "The web page, as plain HTTP. Not needed for use through Home Assistant."
