@@ -27,12 +27,18 @@ fi
 # never on the command line. Host names are only checked where people sign in, and the tool refuses to start with
 # names and no password: so without a password they are left out, with a line in the log saying so.
 password="$(opt '.password // empty')"
+hosts="$(opt '.allowed_hosts[]? | select(length > 0) | gsub("\n"; "\\n")')"
 if [ -n "$password" ]; then
     export ZLM_PASSWORD="$password"
-    for name in $(opt '.allowed_hosts[]?'); do
+    # One line per list element, each becoming exactly one argument (never split on spaces). An empty element is skipped. A line
+    # break cannot be told apart from the end of an element, so jq writes it as \n: the tool then refuses that "host name" by name.
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
         set -- "$@" --allowed-host "$name"
-    done
-elif [ -n "$(opt '.allowed_hosts[]?')" ]; then
+    done <<EOF
+$hosts
+EOF
+elif [ -n "$hosts" ]; then
     echo "zigbee-live-map: allowed_hosts is ignored because no password is set (a published port needs both)" >&2
 fi
 

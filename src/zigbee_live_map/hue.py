@@ -14,8 +14,8 @@ authority:
   before anything, the application key included, is sent. A different one is refused, and the user forgets the
   bridge and sets it up again;
 - only the local network is ever contacted: an explicit list of ranges (below), not Python's wider idea of "private", and
-  the address checked is the one dialled. Loopback only counts when the tool itself is bound to loopback, so that a signed-in
-  user on the network cannot use the bridge form to probe this computer's own ports;
+  the address checked is the one dialled. Loopback only counts when nobody signs in (a loopback bind with no password: `Access.local`), so that a signed-in
+  user, from the network or through a proxy, cannot use the bridge form to probe this computer's own ports;
 - nothing is contacted until the user asks (discover, pair, enter a key, refresh), apart from a bridge set up
   before, which is read at start-up and every 30 seconds.
 
@@ -433,8 +433,9 @@ class HueService:
     def __init__(self, data_dir: Path | None, on_change: Notify | None = None, allow_loopback: bool = True) -> None:
         """data_dir None keeps everything in memory (demo mode). Loading the file contacts nothing.
 
-        `allow_loopback` is whether this computer itself may be the bridge: true only while the tool is bound to loopback
-        (`Access.loopback`). Otherwise a user signed in from the network could use the bridge form to probe the server's own ports.
+        `allow_loopback` is whether this computer itself may be the bridge: true only where nobody signs in: a loopback bind with no
+        password (`Access.local`). Otherwise a user signed in from the network, or through a proxy in front of a loopback bind, could use
+        the bridge form to probe the server's own ports.
         The default keeps what the tests rely on: they run a fake bridge on loopback.
         """
         self.path = (data_dir / "hue.json") if data_dir else None

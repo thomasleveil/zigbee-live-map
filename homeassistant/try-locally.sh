@@ -92,10 +92,14 @@ docker run -d --name "$APP" --network "$NET" --ip "$APP_IP" -e SUPERVISOR_TOKEN=
     -v "$WORK/data:/data" "$IMAGE" >/dev/null
 
 echo "== proxy ($PROXY at $SUPERVISOR_IP, $PREFIX/ -> $APP:$INGRESS_PORT)"
+# The app does not check Host on the ingress channel, by design (Home Assistant's proxy stands in front of it). This
+# stand-in therefore answers only the names the published port is meant to be reached by, 127.0.0.1:$PORT and localhost:$PORT, and
+# refuses any other Host, so that a web page you visit cannot use DNS rebinding to reach the app through this proxy.
 cat > "$WORK/proxy.conf" <<EOF
 map \$http_upgrade \$connection_upgrade { default upgrade; '' close; }
 server {
     listen 80;
+    if (\$http_host !~ "^(127\\.0\\.0\\.1|localhost):$PORT\$") { return 403; }
     location $PREFIX/ {
         proxy_pass http://$APP:$INGRESS_PORT/;
         proxy_http_version 1.1;

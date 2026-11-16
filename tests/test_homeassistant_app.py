@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -220,3 +222,43 @@ def test_the_wheel_is_never_built_straight_into_the_app_folder():
         for line in path.read_text(encoding="utf-8").splitlines():
             assert not ("--out-dir" in line and "homeassistant/zigbee_live_map" in line), f"{path.name}: {line.strip()}"
             assert '--out-dir "$APP_DIR' not in line, f"{path.name}: {line.strip()}"
+
+
+def run_start_script(tmp_path: Path, options: dict) -> tuple[list[str], str]:
+    """start.sh as it is, with the options file moved, the tool replaced by a program that prints its arguments, one per line."""
+    import json
+
+    (tmp_path / "options.json").write_text(json.dumps(options), encoding="utf-8")
+    script = START.replace("#!/command/with-contenv sh", "#!/bin/sh", 1).replace("OPTIONS_FILE=/data/options.json", f"OPTIONS_FILE={tmp_path}/options.json", 1)
+    assert 'exec "$@"' in script
+    script = script.replace('exec "$@"', "shift; printf '%s\\0' \"$@\"", 1)   # NUL-separated: an argument may hold any other character
+    (tmp_path / "start.sh").write_text(script, encoding="utf-8")
+    done = subprocess.run(["/bin/sh", str(tmp_path / "start.sh")], capture_output=True, check=True, env={"PATH": os.environ["PATH"]})
+    return [a.decode() for a in done.stdout.split(b"\0")[:-1]], done.stderr.decode()
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is not installed")
+def test_start_script_passes_each_allowed_host_as_exactly_one_argument(tmp_path):
+    hosts = ["zigbee.home.example", "two words", "", "line\nbreak", "192.168.1.5:8099", "star*"]
+    args, _err = run_start_script(tmp_path, {"demo": True, "password": "synthetic", "allowed_hosts": hosts})
+    passed = [args[i + 1] for i, a in enumerate(args) if a == "--allowed-host"]
+    assert args.count("--allowed-host") == 5   # the empty one is skipped, no other is split
+    assert passed == ["zigbee.home.example", "two words", "line\\nbreak", "192.168.1.5:8099", "star*"]   # a newline cannot be one line of output: it is written as \n, which the tool refuses as a host name
+    none, note = run_start_script(tmp_path, {"demo": True, "password": "synthetic", "allowed_hosts": ["", ""]})
+    assert "--allowed-host" not in none and note == ""
+    ignored, note = run_start_script(tmp_path, {"demo": True, "allowed_hosts": ["zigbee.home.example"]})
+    assert "--allowed-host" not in ignored and "ignored because no password is set" in note
+
+
+def test_start_script_reads_allowed_hosts_line_by_line_and_never_by_word_splitting():
+    assert "while IFS= read -r" in START
+    assert not re.search(r"for \w+ in \$\(opt '\.allowed_hosts", START)
+
+
+def test_try_locally_stand_in_proxy_answers_only_its_own_host_names():
+    """In the ingress channel the app does not check Host, by design: the stand-in for the Supervisor's proxy must, or a rebinding page could use it."""
+    script = (ROOT / "homeassistant" / "try-locally.sh").read_text(encoding="utf-8")
+    line = r'if (\$http_host !~ "^(127\\.0\\.0\\.1|localhost):$PORT\$") { return 403; }'   # as written in the script: a heredoc, so $ and \ are doubled up
+    assert line in script, "the proxy checks Host"
+    comment = script[:script.index(line)].rsplit("\n\n", 1)[-1]
+    assert "DNS rebinding" in comment and "Host" in comment

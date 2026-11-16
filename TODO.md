@@ -22,7 +22,8 @@ sniffing is one data source among several.
   - Publish a prebuilt multi-arch image (aarch64, amd64) once the repository is public, and set `image`
     in `config.yaml`: the wheel then no longer has to be built by hand, and the app installs from the repository URL.
   - Replace the placeholder repository address in `repository.yaml` and `config.yaml`.
-- Native TLS is not built: on a LAN the tool speaks plain HTTP; a TLS-terminating reverse proxy plus `--allowed-host` is the way to protect it on a network you do not trust.
+- Native TLS is not built: on a LAN the tool speaks plain HTTP. On a network you do not trust, put a
+  TLS-terminating reverse proxy in front of a loopback bind, with a password and `--allowed-host` (see README).
 
 ## Active probing (parked)
 

@@ -83,9 +83,11 @@ def authority(text: str) -> tuple[str, int | None] | None:
 
 
 def cookie_name(port: int) -> str:
-    """Cookies are shared by every port of a host, so a fixed name would be sent to other services on this machine and
-    overwritten by another instance. A name that carries the listening port keeps each instance's cookie its own (a browser
-    may still send it elsewhere; sessions are in memory and bound to the address that signed in, so it is no use there)."""
+    """Cookies are shared by every port of a host, so a fixed name would be overwritten by another instance on the same host.
+    A name that carries the listening port keeps the instances apart. It does not keep the cookie from other ports: a browser
+    still sends it to every port of the same host name. What limits a copy of it is the address binding of the session, which
+    helps on a direct LAN bind and does nothing behind a reverse proxy (every visitor has the proxy's address); there, and on a
+    host name shared with services you do not trust, the protection is the cookie staying secret (HttpOnly, Secure behind TLS)."""
     return f"{COOKIE}_{port}"
 
 
@@ -211,22 +213,29 @@ def from_args(args, env: Mapping[str, str] | None = None) -> Access:
 
 
 class Sessions:
-    """Signed-in browsers, in memory only: a restart signs everyone out. A session belongs to the address that signed in."""
+    """Signed-in browsers, in memory only: a restart signs everyone out. A session belongs to the address that signed in.
+
+    A session also knows its open live connections. While one is open the session is in use, so a page left open does not
+    expire under itself; the idle clock starts when the last one closes. However a session ends (sign-out, expiry, being
+    pushed out by newer ones) `on_end` is given its open connections, so that none outlives it.
+    """
 
     MAX = 64
 
     def __init__(self, clock: Callable[[], float] = time.monotonic, ttl: float = SESSION_TTL) -> None:
         self.clock, self.ttl = clock, ttl
+        self.on_end: Callable[[set], None] | None = None
         self._last_used: dict[str, float] = {}
         self._peers: dict[str, str] = {}
+        self._connections: dict[str, set] = {}   # only sessions that have one open: no empty entry is kept
         self._secret = secrets.token_bytes(32)   # makes every session's change token unforgeable without the session itself
 
     def start(self, peer: str = "") -> str:
         now = self.clock()
-        for stale in [sid for sid, used in self._last_used.items() if now - used > self.ttl]:
+        for stale in [sid for sid in self._last_used if now - self._used(sid, now) > self.ttl]:
             self._drop(stale)
         while len(self._last_used) >= self.MAX:
-            self._drop(min(self._last_used, key=self._last_used.get))
+            self._drop(min(self._last_used, key=lambda sid: self._used(sid, now)))   # the least recently used; among connected ones, the oldest
         sid = secrets.token_urlsafe(32)
         self._last_used[sid] = now
         self._peers[sid] = _canonical(peer)
@@ -234,11 +243,10 @@ class Sessions:
 
     def valid(self, sid: str | None, peer: str = "") -> bool:
         """Known, not expired, and presented from the address that signed in (behind a reverse proxy that is the proxy's, every time)."""
-        used = self._last_used.get(sid or "")
-        if used is None or self._peers.get(sid, "") != _canonical(peer):
+        if sid not in self._last_used or self._peers.get(sid, "") != _canonical(peer):
             return False
         now = self.clock()
-        if now - used > self.ttl:
+        if now - self._used(sid, now) > self.ttl:
             self._drop(sid)
             return False
         self._last_used[sid] = now
@@ -247,13 +255,39 @@ class Sessions:
     def end(self, sid: str | None) -> None:
         self._drop(sid or "")
 
+    def attach(self, sid: str, connection: object) -> None:
+        """A live connection of this session is open. Of a session that is gone nothing is kept."""
+        if sid in self._last_used:
+            self._connections.setdefault(sid, set()).add(connection)
+            self._last_used[sid] = self.clock()
+
+    def detach(self, sid: str, connection: object) -> None:
+        held = self._connections.get(sid)
+        if held is None:
+            return
+        held.discard(connection)
+        if not held:
+            del self._connections[sid]
+            if sid in self._last_used:
+                self._last_used[sid] = self.clock()   # the idle clock starts now
+
+    def attached(self, sid: str, connection: object) -> bool:
+        return connection in self._connections.get(sid, ())
+
     def token(self, sid: str) -> str:
         """What changes and the live connection must carry on the sign-in channel: derived from the session, so it dies with it."""
         return hmac.new(self._secret, b"token:" + sid.encode("utf-8", "replace"), hashlib.sha256).hexdigest()
 
+    def _used(self, sid: str, now: float) -> float:
+        """When the session was last in use: now, while a connection is open."""
+        return now if sid in self._connections else self._last_used[sid]
+
     def _drop(self, sid: str) -> None:
         self._last_used.pop(sid, None)
         self._peers.pop(sid, None)
+        held = self._connections.pop(sid, None)
+        if held and self.on_end is not None:
+            self.on_end(held)
 
 
 def _canonical(peer: str | None) -> str:

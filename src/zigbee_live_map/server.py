@@ -23,7 +23,8 @@ from the address of the TCP connection, never from a header:
   cookie, named after the listening port, kept in memory and valid only from the address that signed in)
   except the login page, its POST, the static files and the locale files; changes and /ws also need the
   session's own token, which dies with the session, and an Origin, when present, must name an allowed host.
-  Signing out also closes the session's open live connections. Without a password (--ingress alone) nobody
+  However a session ends (sign-out, 7 days idle, or being pushed out by newer ones) its open live connections are
+  closed; while one is open the session counts as in use. Without a password (--ingress alone) nobody
   can sign in, so every lan request is refused.
 
 Outside the ingress channel the pages cannot be framed by another site. The pages use relative URLs only,
@@ -33,6 +34,7 @@ so they work at "/" and under any path prefix a reverse proxy puts in front of t
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
 import json
 import math
@@ -358,7 +360,7 @@ TOKEN = web.AppKey("token", str)
 ACCESS = web.AppKey("access", Access)
 SESSIONS = web.AppKey("sessions", Sessions)
 GUARD = web.AppKey("login_guard", LoginGuard)
-SOCKETS = web.AppKey("session_sockets", dict)   # session id -> its open live connections, so that signing out can end them
+CLOSING = web.AppKey("closing", set)   # the tasks that are closing connections of ended sessions (held, so that none is dropped half way)
 CHANNEL = web.RequestKey("channel", str)   # which access channel this request fell into
 LOCAL_NAMES = {"127.0.0.1", "localhost"}
 GATE_TEXT = "zigbee-live-map refused this request: {}."
@@ -523,10 +525,13 @@ async def handle_login(request: web.Request) -> web.Response:
         raise web.HTTPNotFound()
     access, sessions, guard = request.app[ACCESS], request.app[SESSIONS], request.app[GUARD]
     peer = _peer(request) or ""
+    port = _socket(request)[1]   # read before the first await: afterwards the connection may be gone
     try:   # the body first: from the gate to the verdict there must be no await, or attempts started together would all pass the gate
         given = (await request.post()).get("password")
     except (ValueError, UnicodeError):
         given = None
+    if _vanished(request):   # the client left while it was sending: nobody to answer, so nothing is judged and no session is started
+        raise web.HTTPForbidden(text=GATE_TEXT.format("its connection is gone"))
     wait = guard.wait(peer)
     if wait > 0:   # too soon after failures: refused without looking at the password, so the refusal cannot tell a right guess from a wrong one
         page = _login_page(failed=True, status=429)
@@ -537,22 +542,31 @@ async def handle_login(request: web.Request) -> web.Response:
         return _login_page(failed=True, status=401)
     guard.succeeded(peer)
     response = web.Response(status=303, headers={"Location": "./", "Cache-Control": "no-store"})
-    response.set_cookie(accessmod.cookie_name(_socket(request)[1]), sessions.start(peer), max_age=accessmod.SESSION_TTL, path="/", httponly=True, samesite="Strict",
+    response.set_cookie(accessmod.cookie_name(port), sessions.start(peer), max_age=accessmod.SESSION_TTL, path="/", httponly=True, samesite="Strict",
                         secure=request.headers.get("X-Forwarded-Proto") == "https")   # behind a TLS proxy the browser must not send it in clear
     return response
 
 
+def close_connections(app: web.Application, connections: set) -> None:
+    """A session ended (sign-out, expiry, eviction): its live connections must not outlive it. Nothing more is sent to them
+    from this moment, whatever their close handshake takes."""
+    hub: Hub = app[HUB]
+
+    async def close(ws: web.WebSocketResponse) -> None:
+        with contextlib.suppress(Exception):   # a client that is already gone is not worth a traceback
+            await ws.close(code=WSCloseCode.POLICY_VIOLATION, message=b"signed out")
+
+    for ws in connections:
+        hub.clients.discard(ws)
+        task = asyncio.get_running_loop().create_task(close(ws))
+        app[CLOSING].add(task)
+        task.add_done_callback(app[CLOSING].discard)
+
+
 async def handle_logout(request: web.Request) -> web.Response:
     """Ends the session, and with it every live connection it opened: a page left open must not go on streaming keys."""
-    sid, name = _sid(request), accessmod.cookie_name(_socket(request)[1])
-    request.app[SESSIONS].end(sid)
-    sockets = request.app[SOCKETS].pop(sid, set()) if sid else set()
-    hub: Hub = request.app[HUB]
-    for ws in sockets:
-        hub.clients.discard(ws)   # nothing more is sent to it, whatever the close handshake takes
-    if sockets:
-        closing = [asyncio.create_task(ws.close(code=WSCloseCode.POLICY_VIOLATION, message=b"signed out")) for ws in sockets]
-        await asyncio.wait(closing, timeout=3)   # a client that does not answer the close does not hold the sign-out back
+    name = accessmod.cookie_name(_socket(request)[1])
+    request.app[SESSIONS].end(_sid(request))   # its connections are closed by Sessions.on_end
     response = web.json_response({})
     response.del_cookie(name, path="/")
     return response
@@ -743,22 +757,26 @@ async def api_vendors_refresh(request: web.Request) -> web.Response:
 
 async def handle_ws(request: web.Request) -> web.StreamResponse:
     hub: Hub = request.app[HUB]
+    sessions: Sessions = request.app[SESSIONS]
     ws = web.WebSocketResponse(heartbeat=20)
     await ws.prepare(request)
+    if _vanished(request):   # the client left during the handshake: nothing to serve, and nothing here may look at its connection
+        return ws
     sid = _sid(request) if request[CHANNEL] == LAN else None
-    sockets: dict = request.app[SOCKETS]
     if sid is not None:   # no await between the check and the registration: a sign-out during the handshake is seen here, a later one closes this socket
         if not _signed_in(request):
             await ws.close(code=WSCloseCode.POLICY_VIOLATION, message=b"signed out")
             return ws
-        sockets.setdefault(sid, set()).add(ws)
-    await ws.send_json(hub.hello())
-    await ws.send_json(hub.status)
-    await ws.send_str(json.dumps({"type": "backlog", "events": list(hub.events)}, separators=(",", ":")))
-    hub.clients.add(ws)
+        sessions.attach(sid, ws)   # while it is open its session counts as in use
     try:
+        await ws.send_json(hub.hello())
+        await ws.send_json(hub.status)
+        await ws.send_str(json.dumps({"type": "backlog", "events": list(hub.events)}, separators=(",", ":")))
+        if sid is not None and not sessions.attached(sid, ws):
+            return ws   # the session ended while these were sent: it was closed
+        hub.clients.add(ws)
         async for msg in ws:
-            if sid is not None and ws not in sockets.get(sid, ()):
+            if sid is not None and not sessions.attached(sid, ws):
                 break   # signed out while a message was on its way: it is not carried out
             if msg.type != WSMsgType.TEXT:
                 continue
@@ -773,10 +791,12 @@ async def handle_ws(request: web.Request) -> web.StreamResponse:
                 await hub.names_changed()
             elif data.get("type") == "channel" and isinstance(data.get("channel"), int):
                 await hub.tune(data["channel"])
+    except ConnectionError:
+        pass   # the client left while it was being sent to
     finally:
         hub.clients.discard(ws)
         if sid is not None:
-            sockets.get(sid, set()).discard(ws)
+            sessions.detach(sid, ws)
     return ws
 
 
@@ -788,7 +808,8 @@ def build_app(hub: Hub, access: Access | None = None, clock=time.monotonic) -> w
     app[ACCESS] = access if access is not None else Access()
     app[SESSIONS] = Sessions(clock)
     app[GUARD] = LoginGuard(clock)
-    app[SOCKETS] = {}
+    app[CLOSING] = set()
+    app[SESSIONS].on_end = lambda connections: close_connections(app, connections)
     app.on_response_prepare.append(_response_headers)
     app.add_routes([
         web.get("/", handle_page), web.get("/devices", handle_page), web.get("/ws", handle_ws),

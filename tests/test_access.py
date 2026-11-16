@@ -1049,3 +1049,162 @@ def test_robust_a_token_with_a_letter_outside_ascii_is_refused_not_a_500(tmp_pat
 
     serve(lan_scenario, tmp_path, lan())
     serve(local_scenario, tmp_path)
+
+
+# ------------------------------------------------------------------------------------------ no live connection outlives its session
+
+async def connected(client, token, base=None, http=None):
+    """A live connection that has read what it is sent on opening (hello, status, backlog)."""
+    ws = await (http or client).ws_connect(f"{base or ''}/ws?token={token}")
+    for _ in range(3):
+        await ws.receive_json()
+    return ws
+
+
+async def detached(sessions):
+    for _ in range(100):   # the server notices a closed connection a moment after the client closes it
+        if not sessions._connections:
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"still registered: {sessions._connections}")
+
+
+def test_session_end_an_open_connection_keeps_its_session_alive_and_the_idle_clock_restarts_when_it_closes(tmp_path):
+    clock = Clock()
+
+    async def scenario(client, hub):
+        sessions = client.server.app[server.SESSIONS]
+        assert (await sign_in(client)).status == 303
+        ws = await connected(client, await token_of(client))
+        clock.now += 2 * acc.SESSION_TTL   # a page left open for a long time, with no request of its own
+        await hub.send_all({"type": "probe"})
+        assert (await asyncio.wait_for(ws.receive_json(), 5))["type"] == "probe"   # still streaming
+        assert (await client.get("/api/keys")).status == 200   # and its session did not expire under it
+        clock.now += 2 * acc.SESSION_TTL
+        await ws.close()
+        await detached(sessions)
+        clock.now += acc.SESSION_TTL - 100   # the idle clock runs from the moment the page was closed
+        assert (await client.get("/api/keys")).status == 200
+        clock.now += acc.SESSION_TTL + 1
+        assert (await client.get("/api/keys")).status == 401
+        assert sessions._connections == {}
+
+    serve(scenario, tmp_path, lan(), clock=clock)
+
+
+def test_session_end_after_the_connection_closed_the_session_expires_as_before(tmp_path):
+    clock = Clock()
+
+    async def scenario(client, hub):
+        assert (await sign_in(client)).status == 303
+        ws = await connected(client, await token_of(client))
+        await ws.close()
+        await detached(client.server.app[server.SESSIONS])
+        clock.now += acc.SESSION_TTL + 1
+        assert (await client.get("/api/keys")).status == 401
+
+    serve(scenario, tmp_path, lan(), clock=clock)
+
+
+def test_session_end_by_eviction_closes_that_sessions_connection_and_no_other(tmp_path):
+    async def scenario(client, hub):
+        sessions = client.server.app[server.SESSIONS]
+        sessions.MAX = 2
+        base = f"http://127.0.0.1:{client.server.port}"
+
+        async def browser(http):
+            assert (await http.post(f"{base}/login", data={"password": PASSWORD}, allow_redirects=False)).status == 303
+            token = (await (await http.get(f"{base}/api/session")).json())["token"]
+            return token, await http.ws_connect(f"{base}/ws?token={token}")
+
+        jars = [aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar(unsafe=True)) for _ in range(3)]
+        try:
+            first_token, first = await browser(jars[0])
+            second_token, second = await browser(jars[1])
+            for ws in (first, second):
+                for _ in range(3):
+                    await ws.receive_json()
+            await browser(jars[2])   # the third sign-in pushes the oldest session out
+            ended = await asyncio.wait_for(first.receive(), 5)
+            assert ended.type in (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED)
+            assert (await jars[0].get(f"{base}/api/keys", allow_redirects=False)).status == 401
+            await hub.send_all({"type": "probe"})
+            assert (await asyncio.wait_for(second.receive_json(), 5))["type"] == "probe"   # the other one streams on
+            assert (await jars[1].get(f"{base}/api/keys")).status == 200 and (await jars[2].get(f"{base}/api/keys")).status == 200
+        finally:
+            for jar in jars:
+                await jar.close()
+
+    serve(scenario, tmp_path, lan())
+
+
+def test_session_end_by_expiry_or_eviction_tells_whoever_holds_its_connections():
+    clock = Clock()
+    ended = []
+    sessions = Sessions(clock, ttl=100)
+    sessions.on_end = ended.append
+    sid, conn = sessions.start(), object()
+    sessions.attach(sid, conn)
+    clock.now += 500
+    assert sessions.valid(sid) and ended == []   # open: in use
+    sessions.detach(sid, conn)
+    clock.now += 101
+    assert not sessions.valid(sid) and ended == []   # expired with nothing open: nobody to tell
+    one, other = sessions.start(), object()
+    sessions.attach(one, other)
+    for _ in range(Sessions.MAX):
+        sessions.start()
+    assert ended == [{other}] and not sessions.valid(one)
+
+
+def test_session_connections_registry_keeps_no_empty_entry():
+    sessions = Sessions(Clock())
+    sid, a, b = sessions.start(), object(), object()
+    assert sessions._connections == {}   # a session without connections has no entry
+    sessions.attach(sid, a)
+    sessions.attach(sid, b)
+    sessions.detach(sid, a)
+    assert sessions._connections == {sid: {b}}
+    sessions.detach(sid, b)
+    sessions.detach(sid, b)   # again: nothing happens
+    assert sessions._connections == {}
+    sessions.attach(sid, a)
+    sessions.end(sid)
+    assert sessions._connections == {}
+    sessions.attach("never signed in", a)   # a connection of a session that is gone is not kept
+    assert sessions._connections == {}
+
+
+# ------------------------------------------------------------------------------------------ a client that leaves mid-request
+
+def test_robust_a_client_that_leaves_while_the_form_is_read_gets_no_traceback(tmp_path, monkeypatch):
+    async def leaving_post(self):
+        self._protocol.transport = None   # the connection is gone by the time the body has been read
+        return {"password": PASSWORD}
+
+    async def main():
+        app = build_app(Hub(DeviceStore(tmp_path), Registry(tmp_path), dict(INFO), 100), lan())
+        monkeypatch.setattr(web.Request, "post", leaving_post)
+        request = make_mocked_request("POST", "/login", app=app)
+        request[server.CHANNEL] = acc.LAN
+        with pytest.raises(web.HTTPException):   # a refusal, not an AttributeError
+            await server.handle_login(request)
+        assert app[server.SESSIONS]._last_used == {}   # and no session nobody will receive
+
+    asyncio.run(main())
+
+
+def test_robust_a_client_that_leaves_during_the_websocket_handshake_gets_no_traceback(tmp_path, monkeypatch):
+    async def leaving_prepare(self, request):
+        request._protocol.transport = None
+
+    async def main():
+        hub = Hub(DeviceStore(tmp_path), Registry(tmp_path), dict(INFO), 100)
+        app = build_app(hub, lan())
+        monkeypatch.setattr(web.WebSocketResponse, "prepare", leaving_prepare)
+        request = make_mocked_request("GET", "/ws", app=app)
+        request[server.CHANNEL] = acc.LAN
+        assert isinstance(await server.handle_ws(request), web.WebSocketResponse)
+        assert hub.clients == set() and app[server.SESSIONS]._connections == {}
+
+    asyncio.run(main())
