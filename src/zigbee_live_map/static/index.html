@@ -47,6 +47,7 @@
 .detail[hidden] { display: none; }
 .detailHead { display: flex; align-items: center; gap: .5rem; padding: .6rem .8rem; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 1; }
 .detailHead h2 { flex: 1; font-size: 1.05rem; word-break: break-word; }
+.cardPaused { margin: 0; padding: .35rem .8rem; border-bottom: 1px solid var(--line); }
 .detailGroup { padding: .6rem .8rem; border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent); }
 .detailGroup > h3 { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: .35rem; }
 .detailGroup.keyed { border-left: 3px solid var(--accent); }
@@ -132,6 +133,7 @@
       <h2 id="detailName"></h2>
       <button type="button" class="close" id="cardClose" data-i18n-aria="card.close">×</button>
     </div>
+    <p class="note cardPaused" id="cardPaused" role="status" hidden data-i18n="detail.paused"></p>
     <div id="cardBody"></div>
     <div class="detailActions">
       <button type="button" id="btnWatch" aria-pressed="false" data-i18n-title="tip.watch"></button>
@@ -628,6 +630,18 @@ function renderDevices() {
   }
 }
 const ms1 = s => Math.round(s * 1000);
+// The sheet is redrawn several times a second while frames arrive. Redrawing replaces its text nodes, which drops a text
+// selection before it can be copied: so while text is being selected in the sheet (button held, or a selection that sits in
+// it) the redraw waits, a line says so, and the sheet catches up once the selection is gone.
+let cardHeld = false, cardHtml = "";
+const selectingInCard = () => {
+  if ($("card").hidden) return false;
+  if (cardHeld) return true;
+  const s = getSelection();
+  return !!s && !s.isCollapsed && ($("cardBody").contains(s.anchorNode) || $("cardBody").contains(s.focusNode));
+};
+$("cardBody").addEventListener("pointerdown", () => { cardHeld = true; });
+for (const end of ["pointerup", "pointercancel"]) addEventListener(end, () => { cardHeld = false; });
 function renderCard() {
   const card = $("card");
   $("stage").classList.toggle("detail-open", !!(sel && S.nodes.has(sel)));
@@ -667,7 +681,7 @@ function renderCard() {
     hh.battery ? [c("battery"), t("card.hubBattery", { level: hh.battery.level, state: hh.battery.state ? t(ZLM.has("hue.batt." + hh.battery.state) ? "hue.batt." + hh.battery.state : "hue.batt.unknown") : "?" })] : null].filter(Boolean) : [];
   const hubGroup = S.hue.configured ? `<div class="detailGroup hub"><h3>${esc(t("detail.hub"))}</h3>` + (hh ? dl(hubRows) : `<p class="note">${esc(t(n.ieee ? "detail.hubUnknown" : "detail.hubNoIeee"))}</p>`) + `</div>` : "";
   $("detailName").textContent = label(sel);
-  $("cardBody").innerHTML =
+  const html =
     `<div class="detailGroup"><h3>${esc(t("detail.clear"))}</h3>${dl(clear)}` +
     (links ? `<div class="note">${esc(c("links"))}</div><ul>${links}</ul>` : "") +
     `<p>${Object.entries(n.cats).sort((a, b) => b[1] - a[1]).map(([cat, k]) => chip(cat, ` <span class="n">${k}</span>`)).join(" ")}</p></div>` +
@@ -677,6 +691,7 @@ function renderCard() {
       ? (keyed.length ? dl(keyed) : "") + (costs ? `<div class="note">${esc(c("costs"))}</div><ul class="costs">${costs}</ul>` : "")
       : `<p class="note">${esc(t(S.security && S.security.keyKnown ? "detail.keyedWaiting" : "detail.keyless"))}</p>`) +
     `</div>`;
+  if (html !== cardHtml) $("cardBody").innerHTML = cardHtml = html;   // unchanged: the nodes stay, and so do the scroll position and any selection
   $("renameForm").hidden = !n.ieee; $("btnWatch").hidden = !n.ieee;
   $("renameInput").placeholder = hh && hh.name ? hh.name : "";
   $("btnWatch").textContent = t(isFocus(n) ? "card.unwatch" : "card.watch"); $("btnWatch").setAttribute("aria-pressed", String(isFocus(n)));
@@ -903,7 +918,8 @@ async function connect() {
     renderHud(); drawRhythm();
     if (dirty.legend) { renderLegend(); dirty.legend = false; }
     if (dirty.devices) { renderDevices(); dirty.devices = false; }
-    if (dirty.card) { renderCard(); dirty.card = false; }
+    const selecting = selectingInCard(); $("cardPaused").hidden = !selecting;
+    if (dirty.card && !selecting) { renderCard(); dirty.card = false; }
     if (dirty.security) { renderSecurity(); dirty.security = false; }
     if (++ticks % 5 === 0) renderIssues();
   }, 400);

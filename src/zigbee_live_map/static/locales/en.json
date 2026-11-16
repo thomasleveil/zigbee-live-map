@@ -370,6 +370,7 @@
   "detail.hub": "From the hub",
   "detail.hubUnknown": "The bridge does not list this device.",
   "detail.hubNoIeee": "Its IEEE address is not known yet, so it cannot be matched to the bridge's list.",
+  "detail.paused": "Paused while you select text. Click elsewhere to resume.",
   "card.hubName": "Name in the hub",
   "card.hubProduct": "Product",
   "card.hubModel": "Model id",

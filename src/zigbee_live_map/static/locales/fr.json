@@ -370,6 +370,7 @@
   "detail.hub": "Selon le pont",
   "detail.hubUnknown": "Le pont ne liste pas cet appareil.",
   "detail.hubNoIeee": "Son adresse IEEE n'est pas encore connue, il ne peut donc pas être rapproché de la liste du pont.",
+  "detail.paused": "En pause pendant ta sélection de texte. Clique ailleurs pour reprendre.",
   "card.hubName": "Nom dans le pont",
   "card.hubProduct": "Produit",
   "card.hubModel": "Identifiant du modèle",

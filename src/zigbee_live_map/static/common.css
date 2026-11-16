@@ -44,9 +44,13 @@ button.chip[aria-pressed="false"] { color: var(--muted); background: transparent
 
 dialog.settings { width: min(34rem, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); }
 dialog.settings::backdrop { background: rgba(2, 4, 10, .6); }
-.settings header { display: flex; align-items: center; gap: 1rem; padding: .8rem 1rem; border-bottom: 1px solid var(--line); }
+/* Open, a dialog is a column whose body alone scrolls: the title and the close button stay in view, and the wheel never
+   reaches the page behind (contain stops the scroll at the body's ends; the :has rule stops it over the backdrop). */
+dialog.settings[open] { display: flex; flex-direction: column; overflow: hidden; }
+html:has(dialog[open]) { overflow: hidden; }
+.settings header { display: flex; flex: none; align-items: center; gap: 1rem; padding: .8rem 1rem; border-bottom: 1px solid var(--line); }
 .settings header h2 { flex: 1; font-size: 1.2rem; }
-.settings .body { padding: .4rem 1rem 1rem; overflow: auto; }
+.settings .body { padding: .4rem 1rem 1rem; overflow: auto; min-height: 0; overscroll-behavior: contain; }
 .settings section, .settings fieldset { border: 0; border-top: 1px solid var(--line); margin: 0; padding: .9rem 0; }
 .settings section:first-child { border-top: 0; }
 .settings h3, .settings legend, .settings .lead { font-size: 1.05rem; font-weight: 700; padding: 0; margin: 0 0 .5rem; display: block; }
