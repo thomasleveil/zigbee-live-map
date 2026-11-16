@@ -6,15 +6,13 @@ sniffing is one data source among several.
 
 ## Controller / hub integration
 
-- **Hue Bridge**: discover it on the LAN via mDNS (`_hue._tcp.local.`), then create an
-  application key through the CLIP REST API using the physical link-button flow. Store the
-  key locally like network keys (own file, `0600`). Use it to enrich the map with
-  authoritative device names, models, types and rooms, per-device **reachability**, and the
-  bridge's own link-quality (LQI) figures.
-  _Verified 2026-11-15: the bridge answers the mDNS browse (`Hue Bridge - 0A0B0C`)._
 - Later: the same enrichment from other controllers (Home Assistant, deCONZ, zigbee2mqtt…).
 - Use hub reachability as the "is it alive / what is it" answer for integrated devices,
-  which removes the need to transmit for those.
+  which removes the need to transmit for those (done for Hue, in the map and the issues panel;
+  other controllers to follow).
+- The Hue API exposes **no link quality** (no LQI, no RSSI, in CLIP v1 or v2): the bridge
+  gives reachability only (`zigbee_connectivity.status`), so the map's link figures stay
+  sniffer-derived.
 
 ## LAN / Home Assistant deployment (`127.0.0.1` is too restrictive)
 

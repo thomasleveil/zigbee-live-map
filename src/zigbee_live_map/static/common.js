@@ -90,6 +90,24 @@ const ZLM = (() => {
             <button type="submit" data-i18n="keys.add"></button>
           </form>
           <p class="note" id="zlmKeyMsg" role="status"></p></section>
+        <section aria-labelledby="zlmHueTitle"><h3 id="zlmHueTitle" data-i18n="hue.title"></h3><p class="note" data-i18n="hue.help"></p>
+          <p id="zlmHueStatus" role="status"></p>
+          <div id="zlmHueSetup">
+            <p><button type="button" id="zlmHueFind" data-i18n="hue.find"></button></p>
+            <ul class="huefound" id="zlmHueFound"></ul>
+            <form class="hueform" id="zlmHuePair">
+              <label class="wide"><span data-i18n="hue.host"></span><input id="zlmHueHost" type="text" autocomplete="off" spellcheck="false" maxlength="255" placeholder="10.0.0.5"></label>
+              <button type="submit" data-i18n="hue.pair"></button>
+            </form>
+            <p class="note" data-i18n="hue.pair.help"></p>
+            <form class="hueform" id="zlmHueKeyForm">
+              <label class="wide"><span data-i18n="hue.key"></span><input id="zlmHueKey" type="password" autocomplete="off" spellcheck="false" maxlength="128"></label>
+              <button type="submit" data-i18n="hue.key.use"></button>
+            </form>
+            <p class="note" data-i18n="hue.trust"></p>
+          </div>
+          <p id="zlmHueManage" class="row"><button type="button" id="zlmHueRefresh" data-i18n="hue.refresh"></button><button type="button" id="zlmHueForget"></button></p>
+          <p class="note" id="zlmHueMsg" role="status"></p></section>
         <section><h3 data-i18n="settings.vendors"></h3><p id="zlmVendorStatus" role="status"></p>
           <p><button type="button" id="zlmVendorRefresh" data-i18n="settings.vendors.refresh"></button></p><p class="note" data-i18n="settings.vendors.help"></p></section>
         <section><h3 data-i18n="settings.devices"></h3><p class="note" data-i18n="settings.devices.help"></p><p><a class="btn" href="/devices" data-i18n="settings.devices.open"></a></p></section>
@@ -116,7 +134,54 @@ const ZLM = (() => {
         renderKeys(res.keys, res.pan); q("zlmKeyVal").value = ""; q("zlmKeyLabel").value = ""; q("zlmKeyMsg").textContent = t("keys.saved");
       } catch (err) { q("zlmKeyMsg").textContent = t("keys.failed", { error: err.message }); }
     });
+    dialog.addEventListener("close", () => clearTimeout(hueTimer));
+    q("zlmHueFind").addEventListener("click", async () => {
+      const button = q("zlmHueFind"), msg = q("zlmHueMsg");
+      button.disabled = true; msg.textContent = t("hue.finding");
+      try { hueFound = (await getJson("/api/hue/discover", { method: "POST" })).bridges; renderFound(); msg.textContent = hueFound.length ? "" : t("hue.found.none"); }
+      catch (err) { msg.textContent = t("hue.failed", { error: err.message }); }
+      button.disabled = false;
+    });
+    q("zlmHuePair").addEventListener("submit", ev => { ev.preventDefault(); hueCall("/api/hue/pair", "POST", { host: q("zlmHueHost").value }); });
+    q("zlmHueKeyForm").addEventListener("submit", async ev => {
+      ev.preventDefault();
+      if (await hueCall("/api/hue/key", "POST", { host: q("zlmHueHost").value, key: q("zlmHueKey").value })) q("zlmHueKey").value = "";
+    });
+    q("zlmHueRefresh").addEventListener("click", () => hueCall("/api/hue/refresh", "POST"));
+    q("zlmHueForget").addEventListener("click", () => hueCall("/api/hue", "DELETE"));
     if (extras) { q("zlmExtras").hidden = false; extras(q("zlmExtras")); }
+  }
+  // ---- Hue Bridge: the page only ever learns whether a bridge is set up, its name and id, when it was read, and the last error
+  let hue = null, hueFound = null, hueTimer = null;
+  function renderFound() {
+    const box = dialog.querySelector("#zlmHueFound");
+    box.innerHTML = (hueFound || []).map((b, i) => `<li><span>${esc(t("hue.found.row", { name: b.name, id: b.bridgeId || "?", host: b.host }))}</span> <button type="button" data-i="${i}">${esc(t("hue.found.use", { name: b.name }))}</button></li>`).join("");
+    for (const b of box.querySelectorAll("button")) b.addEventListener("click", () => { const input = dialog.querySelector("#zlmHueHost"); input.value = hueFound[b.dataset.i].host; input.focus(); });
+  }
+  function renderHue(st) {
+    if (st) hue = st;
+    if (!dialog || !hue) return;
+    const q = id => dialog.querySelector("#" + id), waiting = hue.pairing === "waiting";
+    let text;
+    if (waiting) text = t("hue.waiting");
+    else if (hue.configured) text = t(hue.lastRead ? "hue.status.ok" : "hue.status.never", { name: hue.name, id: hue.bridgeId, time: hue.lastRead ? new Date(hue.lastRead * 1000).toLocaleTimeString(lang) : "" });
+    else text = t(hue.pairing === "timeout" ? "hue.timeout" : "hue.none");
+    if (hue.configured && hue.channel) text += " " + t("hue.status.channel", { channel: hue.channel });
+    if (hue.error) text += " " + t("hue.status.error", { error: hue.error });
+    q("zlmHueStatus").textContent = text;
+    q("zlmHueSetup").hidden = hue.configured || waiting;
+    q("zlmHueManage").hidden = !hue.configured && !waiting;
+    q("zlmHueRefresh").hidden = waiting;
+    q("zlmHueForget").textContent = t(waiting ? "hue.cancel" : "hue.forget");
+    clearTimeout(hueTimer);
+    if (waiting && dialog.open) hueTimer = setTimeout(pollHue, 1000);   // pairing runs on the server: ask how it is going
+  }
+  async function pollHue() { try { renderHue(await getJson("/api/hue")); } catch (_) { hueTimer = setTimeout(pollHue, 2000); } }
+  async function hueCall(url, method, body) {
+    const msg = dialog.querySelector("#zlmHueMsg");
+    msg.textContent = "";
+    try { renderHue(await getJson(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined })); return true; }
+    catch (err) { msg.textContent = t("hue.failed", { error: err.message }); return false; }
   }
   function renderKeys(list, currentPan) {
     const box = dialog.querySelector("#zlmKeyList"), panInput = dialog.querySelector("#zlmKeyPan");
@@ -137,13 +202,14 @@ const ZLM = (() => {
     select.value = prefs.get("lang", "auto");
     const theme = prefs.get("theme", "auto");
     for (const radio of dialog.querySelectorAll('input[name="zlmTheme"]')) radio.checked = radio.value === theme;
-    translate(dialog);
+    translate(dialog); renderFound(); renderHue();
   }
   async function openSettings() {
     if (!dialog) buildSettings();
     fillSettings(); dialog.showModal();
     try { const d = await getJson("/api/keys"); renderKeys(d.keys, d.pan); } catch (_) {}
     try { showVendors(await getJson("/api/vendors")); } catch (_) {}
+    try { renderHue(await getJson("/api/hue")); } catch (_) {}
   }
   document.addEventListener("zlm:lang", () => { if (dialog) fillSettings(); });
 
@@ -152,5 +218,5 @@ const ZLM = (() => {
     strings = reference;
     await applyLang();
   }
-  return { init, t, has, esc, rich, translate, prefs, getJson, token, openSettings, setExtras(fn) { extras = fn; }, get lang() { return lang; } };
+  return { init, t, has, esc, rich, translate, prefs, getJson, token, openSettings, hueChanged: renderHue, setExtras(fn) { extras = fn; }, get lang() { return lang; } };
 })();

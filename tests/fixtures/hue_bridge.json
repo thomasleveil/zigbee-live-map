@@ -1,0 +1,408 @@
+{
+  "_note": "Synthetic fixture. All ids, names and MACs invented. Key 'GET /clip/v2/resource/<type>' maps to the envelope. Real bridges list extra service rtypes on devices (device_software_update, entertainment, ...) and extra fields on lights; omitted here. References to button, grouped_light and zigbee_device_discovery resources are intentionally dangling (those types are not served): a client must tolerate unresolved rids.",
+  "device": {
+    "errors": [],
+    "data": [
+      {
+        "id": "6687f6f6-76f9-5469-9b1c-c2fb7754df57",
+        "product_data": {
+          "model_id": "BSB002",
+          "manufacturer_name": "Signify Netherlands B.V.",
+          "product_name": "Hue Bridge",
+          "product_archetype": "bridge_v2",
+          "certified": true,
+          "software_version": "1976154040"
+        },
+        "metadata": {
+          "name": "Hue Bridge",
+          "archetype": "bridge_v2"
+        },
+        "services": [
+          {
+            "rid": "98ba59e6-e9db-5e69-914b-b56a44becfcc",
+            "rtype": "bridge"
+          },
+          {
+            "rid": "99f5b6fd-fb5e-5da3-8d4b-124356705208",
+            "rtype": "zigbee_connectivity"
+          },
+          {
+            "rid": "c2364af5-865d-5756-8ce8-f967327fe18d",
+            "rtype": "zigbee_device_discovery"
+          }
+        ],
+        "type": "device"
+      },
+      {
+        "id": "a98a77b3-3097-5304-a96b-ba761216d91d",
+        "id_v1": "/lights/1",
+        "product_data": {
+          "model_id": "LCT015",
+          "manufacturer_name": "Signify Netherlands B.V.",
+          "product_name": "Hue color lamp",
+          "product_archetype": "sultan_bulb",
+          "certified": true,
+          "software_version": "1.116.3",
+          "hardware_platform_type": "100b-100"
+        },
+        "metadata": {
+          "name": "Kitchen lamp",
+          "archetype": "sultan_bulb"
+        },
+        "services": [
+          {
+            "rid": "46378649-9969-5407-bd41-bf5c9ec698e3",
+            "rtype": "light"
+          },
+          {
+            "rid": "8ea3b5a4-2c18-537a-809f-9019491c3ef7",
+            "rtype": "zigbee_connectivity"
+          }
+        ],
+        "type": "device"
+      },
+      {
+        "id": "3b3d79ad-2f25-5288-a785-ce0ffc585837",
+        "id_v1": "/lights/2",
+        "product_data": {
+          "model_id": "LST002",
+          "manufacturer_name": "Signify Netherlands B.V.",
+          "product_name": "Hue lightstrip plus",
+          "product_archetype": "hue_lightstrip",
+          "certified": true,
+          "software_version": "1.116.3",
+          "hardware_platform_type": "100b-10d"
+        },
+        "metadata": {
+          "name": "Kitchen strip",
+          "archetype": "hue_lightstrip"
+        },
+        "services": [
+          {
+            "rid": "9ac89e69-2e67-5901-bca0-27dea926b738",
+            "rtype": "light"
+          },
+          {
+            "rid": "e04e37c3-709b-530b-ae92-c37279aacddd",
+            "rtype": "zigbee_connectivity"
+          }
+        ],
+        "type": "device"
+      },
+      {
+        "id": "82a8397e-8656-5eb3-941f-3a299bb0683e",
+        "id_v1": "/lights/3",
+        "product_data": {
+          "model_id": "LWB010",
+          "manufacturer_name": "Signify Netherlands B.V.",
+          "product_name": "Hue white lamp",
+          "product_archetype": "classic_bulb",
+          "certified": true,
+          "software_version": "1.116.3",
+          "hardware_platform_type": "100b-116"
+        },
+        "metadata": {
+          "name": "Bedroom lamp",
+          "archetype": "classic_bulb"
+        },
+        "services": [
+          {
+            "rid": "0b101ed0-aa09-5347-8abf-0ecda0e186c2",
+            "rtype": "light"
+          },
+          {
+            "rid": "927e5812-11ca-50d5-8fd5-55851f1dfaf2",
+            "rtype": "zigbee_connectivity"
+          }
+        ],
+        "type": "device"
+      },
+      {
+        "id": "1174c47e-d5e6-5b9b-b7bf-b4d71474d4cf",
+        "id_v1": "/sensors/4",
+        "product_data": {
+          "model_id": "RWL021",
+          "manufacturer_name": "Signify Netherlands B.V.",
+          "product_name": "Hue dimmer switch",
+          "product_archetype": "unknown_archetype",
+          "certified": true,
+          "software_version": "2.44.0",
+          "hardware_platform_type": "100b-109"
+        },
+        "metadata": {
+          "name": "Bedroom dimmer",
+          "archetype": "unknown_archetype"
+        },
+        "services": [
+          {
+            "rid": "9c9f8d30-6c71-520c-95b7-7ba2e8296d52",
+            "rtype": "button"
+          },
+          {
+            "rid": "47555d04-94c4-5f6a-a045-53c4c5894e24",
+            "rtype": "button"
+          },
+          {
+            "rid": "229e22b9-ecac-5105-ac2a-ebecbf99f880",
+            "rtype": "zigbee_connectivity"
+          },
+          {
+            "rid": "fa8557b8-a7b7-568e-8b20-b6758fc8fba8",
+            "rtype": "device_power"
+          }
+        ],
+        "type": "device"
+      }
+    ]
+  },
+  "zigbee_connectivity": {
+    "errors": [],
+    "data": [
+      {
+        "id": "99f5b6fd-fb5e-5da3-8d4b-124356705208",
+        "owner": {
+          "rid": "6687f6f6-76f9-5469-9b1c-c2fb7754df57",
+          "rtype": "device"
+        },
+        "status": "connected",
+        "mac_address": "00:17:88:01:0a:0b:0c:01",
+        "type": "zigbee_connectivity",
+        "channel": {
+          "status": "set",
+          "value": "channel_25"
+        },
+        "extended_pan_id": "001788010a0b0c01"
+      },
+      {
+        "id": "8ea3b5a4-2c18-537a-809f-9019491c3ef7",
+        "id_v1": "/lights/1",
+        "owner": {
+          "rid": "a98a77b3-3097-5304-a96b-ba761216d91d",
+          "rtype": "device"
+        },
+        "status": "connected",
+        "mac_address": "00:17:88:01:0a:0b:0c:0d",
+        "type": "zigbee_connectivity"
+      },
+      {
+        "id": "e04e37c3-709b-530b-ae92-c37279aacddd",
+        "id_v1": "/lights/2",
+        "owner": {
+          "rid": "3b3d79ad-2f25-5288-a785-ce0ffc585837",
+          "rtype": "device"
+        },
+        "status": "unidirectional_incoming",
+        "mac_address": "00:17:88:01:0a:0b:0c:0e",
+        "type": "zigbee_connectivity"
+      },
+      {
+        "id": "927e5812-11ca-50d5-8fd5-55851f1dfaf2",
+        "id_v1": "/lights/3",
+        "owner": {
+          "rid": "82a8397e-8656-5eb3-941f-3a299bb0683e",
+          "rtype": "device"
+        },
+        "status": "connectivity_issue",
+        "mac_address": "00:17:88:01:0a:0b:0c:0f",
+        "type": "zigbee_connectivity"
+      },
+      {
+        "id": "229e22b9-ecac-5105-ac2a-ebecbf99f880",
+        "id_v1": "/sensors/4",
+        "owner": {
+          "rid": "1174c47e-d5e6-5b9b-b7bf-b4d71474d4cf",
+          "rtype": "device"
+        },
+        "status": "disconnected",
+        "mac_address": "00:17:88:01:0a:0b:0c:10",
+        "type": "zigbee_connectivity"
+      }
+    ]
+  },
+  "room": {
+    "errors": [],
+    "data": [
+      {
+        "id": "6ded7509-b0e5-5ef8-8ed2-09ee62c1780a",
+        "id_v1": "/groups/1",
+        "children": [
+          {
+            "rid": "a98a77b3-3097-5304-a96b-ba761216d91d",
+            "rtype": "device"
+          },
+          {
+            "rid": "3b3d79ad-2f25-5288-a785-ce0ffc585837",
+            "rtype": "device"
+          }
+        ],
+        "services": [
+          {
+            "rid": "0abd0704-7b11-5413-93fd-7456ece03aff",
+            "rtype": "grouped_light"
+          }
+        ],
+        "metadata": {
+          "name": "Kitchen",
+          "archetype": "kitchen"
+        },
+        "type": "room"
+      },
+      {
+        "id": "1836f010-0130-5916-9cfc-910bf003e22b",
+        "id_v1": "/groups/2",
+        "children": [
+          {
+            "rid": "82a8397e-8656-5eb3-941f-3a299bb0683e",
+            "rtype": "device"
+          },
+          {
+            "rid": "1174c47e-d5e6-5b9b-b7bf-b4d71474d4cf",
+            "rtype": "device"
+          }
+        ],
+        "services": [
+          {
+            "rid": "51762886-e381-5b2a-a59f-71d8613bd685",
+            "rtype": "grouped_light"
+          }
+        ],
+        "metadata": {
+          "name": "Bedroom",
+          "archetype": "bedroom"
+        },
+        "type": "room"
+      }
+    ]
+  },
+  "bridge": {
+    "errors": [],
+    "data": [
+      {
+        "id": "98ba59e6-e9db-5e69-914b-b56a44becfcc",
+        "owner": {
+          "rid": "6687f6f6-76f9-5469-9b1c-c2fb7754df57",
+          "rtype": "device"
+        },
+        "bridge_id": "001788fffe0a0b0c",
+        "time_zone": {
+          "time_zone": "Europe/Paris"
+        },
+        "type": "bridge"
+      }
+    ]
+  },
+  "bridge_home": {
+    "errors": [],
+    "data": [
+      {
+        "id": "a91600f7-5502-5e98-8402-9048f3d995ca",
+        "id_v1": "/groups/0",
+        "children": [
+          {
+            "rid": "6ded7509-b0e5-5ef8-8ed2-09ee62c1780a",
+            "rtype": "room"
+          },
+          {
+            "rid": "1836f010-0130-5916-9cfc-910bf003e22b",
+            "rtype": "room"
+          }
+        ],
+        "services": [
+          {
+            "rid": "fc582dee-1257-5443-9e6c-bda189f3fc11",
+            "rtype": "grouped_light"
+          }
+        ],
+        "type": "bridge_home"
+      }
+    ]
+  },
+  "device_power": {
+    "errors": [],
+    "data": [
+      {
+        "id": "fa8557b8-a7b7-568e-8b20-b6758fc8fba8",
+        "owner": {
+          "rid": "1174c47e-d5e6-5b9b-b7bf-b4d71474d4cf",
+          "rtype": "device"
+        },
+        "power_state": {
+          "battery_state": "low",
+          "battery_level": 14
+        },
+        "type": "device_power"
+      }
+    ]
+  },
+  "light": {
+    "errors": [],
+    "data": [
+      {
+        "id": "46378649-9969-5407-bd41-bf5c9ec698e3",
+        "id_v1": "/lights/1",
+        "owner": {
+          "rid": "a98a77b3-3097-5304-a96b-ba761216d91d",
+          "rtype": "device"
+        },
+        "metadata": {
+          "name": "Kitchen lamp",
+          "archetype": "sultan_bulb",
+          "function": "mixed"
+        },
+        "on": {
+          "on": true
+        },
+        "dimming": {
+          "brightness": 80.0,
+          "min_dim_level": 0.2
+        },
+        "mode": "normal",
+        "type": "light"
+      },
+      {
+        "id": "9ac89e69-2e67-5901-bca0-27dea926b738",
+        "id_v1": "/lights/2",
+        "owner": {
+          "rid": "3b3d79ad-2f25-5288-a785-ce0ffc585837",
+          "rtype": "device"
+        },
+        "metadata": {
+          "name": "Kitchen strip",
+          "archetype": "hue_lightstrip",
+          "function": "mixed"
+        },
+        "on": {
+          "on": false
+        },
+        "dimming": {
+          "brightness": 100.0,
+          "min_dim_level": 0.2
+        },
+        "mode": "normal",
+        "type": "light"
+      },
+      {
+        "id": "0b101ed0-aa09-5347-8abf-0ecda0e186c2",
+        "id_v1": "/lights/3",
+        "owner": {
+          "rid": "82a8397e-8656-5eb3-941f-3a299bb0683e",
+          "rtype": "device"
+        },
+        "metadata": {
+          "name": "Bedroom lamp",
+          "archetype": "classic_bulb",
+          "function": "mixed"
+        },
+        "on": {
+          "on": false
+        },
+        "dimming": {
+          "brightness": 50.0,
+          "min_dim_level": 0.2
+        },
+        "mode": "normal",
+        "type": "light"
+      }
+    ]
+  }
+}

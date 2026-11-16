@@ -51,6 +51,8 @@
 .detailGroup > h3 { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: .35rem; }
 .detailGroup.keyed { border-left: 3px solid var(--accent); }
 .detailGroup.keyed > h3 { color: var(--accent); }
+.detailGroup.hub { border-left: 3px solid var(--n-router); }
+.detailGroup.hub > h3 { color: var(--n-router); }
 .detailActions { padding: .6rem .8rem; display: grid; gap: .5rem; }
 #card dl { display: grid; grid-template-columns: max-content 1fr; gap: .15rem .7rem; margin: .5rem 0; }
 #card dt { color: var(--muted); } #card dd { margin: 0; word-break: break-word; }
@@ -195,13 +197,18 @@ const newFocus = () => ({ polls: 0, relayed: 0, rebroadcast: 0, beacon: null, jo
 function reset() {
   S = { pans: {}, hint: new Map(), nodes: new Map(), links: new Map(), pairs: new Map(), waiting: new Map(), lastHandover: null, sweptAt: 0, ghostsAt: 0, events: [], counts: {},
         ieee2addr: new Map(), names: {}, vendors: {}, focusIeee: null, focusAddr: null, total: 0, recent: [], pan: null, mode: "live", channel: null, canTune: false, focus: newFocus(),
-        security: { vulnerable: false, secureJoinSeen: false, keyKnown: false, keySource: null, key: null }, identities: {}, costs: {}, batteries: {} };
+        security: { vulnerable: false, secureJoinSeen: false, keyKnown: false, keySource: null, key: null }, identities: {}, costs: {}, batteries: {},
+        hue: { configured: false, devices: {} } };
   parts.length = 0; rings.length = 0;
 }
 reset();
 
 const key = a => (a && a.includes(":")) ? (S.ieee2addr.get(a) || a) : a;
 const nameOf = n => (n && n.ieee && S.names[n.ieee] && S.names[n.ieee].name) || null;
+// What the hub (a Hue Bridge the user set up) says about a device: its own facts, and whether it can reach it.
+const hubOf = n => (S.hue.configured && n && n.ieee && S.hue.devices[n.ieee]) || null;
+const hubBad = h => !!h && h.status !== "connected";
+const hubState = h => t(ZLM.has("hue.s." + h.status) ? "hue.s." + h.status : "hue.s.unknown");
 const label = a => { const n = S.nodes.get(a); return nameOf(n) || a || "?"; };
 const who = a => BROADCAST.has(a) ? t("bc." + a) : label(a);
 const role = n => n.addr === "0x0000" ? "coord" : n.router ? "router" : n.zed ? "zed" : "unknown";
@@ -483,6 +490,11 @@ function tag(text, x, y, border, ink) {
   ctx.beginPath(); ctx.rect(x - tw / 2, y - 10, tw, 20); ctx.fill(); ctx.stroke();
   ctx.fillStyle = rgba(ink, 1); ctx.fillText(text, x, y + .5);
 }
+function flagBadge(x, y) {   // a triangle with "!": the shape says it, the colour only backs it up
+  ctx.beginPath(); ctx.moveTo(x, y - 9); ctx.lineTo(x + 9, y + 7); ctx.lineTo(x - 9, y + 7); ctx.closePath();
+  ctx.fillStyle = rgba(pal.panel, 1); ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = rgba(pal.warn, 1); ctx.stroke();
+  ctx.fillStyle = rgba(pal.warn, 1); ctx.fillText("!", x, y + 3);
+}
 function draw(ts) {
   const { w, h, dpr } = sizeCanvas(cv); cam.w = w; cam.h = h;
   if (w < 2 || h < 2) return;
@@ -560,7 +572,9 @@ function draw(ts) {
     else if (rl === "router") { ctx.beginPath(); ctx.arc(x, y, r + 4, 0, 6.283); ctx.stroke(); }
     if (isFocus(n)) { ctx.lineWidth = 2.2; ctx.beginPath(); ctx.arc(x, y, r + 8, 0, 6.283); ctx.stroke(); }
     if (sel === n.addr || hover === n.addr) { ctx.lineWidth = 2.5; ctx.strokeStyle = rgba(pal.sel, 1); ctx.beginPath(); ctx.arc(x, y, r + 12, 0, 6.283); ctx.stroke(); }
-    tag(nameOf(n) || n.addr, x, y + r + 19, isFocus(n) ? pal.node.focus : pal.line, nameOf(n) ? pal.ink : pal.muted);
+    const flag = hubBad(hubOf(n));
+    if (flag) flagBadge(x + r + 9, y - r - 9);
+    tag((flag ? "⚠ " : "") + (nameOf(n) || n.addr), x, y + r + 19, isFocus(n) ? pal.node.focus : pal.line, nameOf(n) ? pal.ink : pal.muted);
     ctx.globalAlpha = 1; n.pulse *= .93;
   }
 }
@@ -603,8 +617,9 @@ function renderDevices() {
   for (const n of list) {
     const b = document.createElement("button"); b.type = "button";
     const bt = S.batteries[n.addr], bstr = bt ? (bt.percent != null ? ` 🔋${bt.percent}%` : ` 🔋${bt.volts}V`) : "";
-    b.textContent = `${({ coord: "■", router: "●", zed: "○", unknown: "·" })[role(n)]} ${label(n.addr)}${bstr}`;
-    b.setAttribute("aria-label", `${label(n.addr)}, ${t("role." + role(n))}`); b.setAttribute("aria-pressed", String(sel === n.addr));
+    const hb = hubOf(n), flag = hubBad(hb);
+    b.textContent = `${({ coord: "■", router: "●", zed: "○", unknown: "·" })[role(n)]} ${flag ? "⚠ " : ""}${label(n.addr)}${bstr}`;
+    b.setAttribute("aria-label", `${label(n.addr)}, ${t("role." + role(n))}${flag ? ", " + t("hue.flag", { state: hubState(hb) }) : ""}`); b.setAttribute("aria-pressed", String(sel === n.addr));
     b.title = t("tip.device", { role: t("role." + role(n)) });
     b.addEventListener("click", () => select(n.addr)); box.appendChild(b);
   }
@@ -642,11 +657,18 @@ function renderCard() {
   const costRows = S.costs[sel] || [];
   const costs = costRows.map(r => { const hi = r.incoming >= 5 || r.outgoing >= 5; return `<li><span>${esc(label(r.addr))}</span><span class="${hi ? "hi" : ""}">${esc(t("card.costRow", { in: r.incoming, out: r.outgoing }))}</span></li>`; }).join("");
   const dl = rows => `<dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`;
+  const hh = hubOf(n), plainWords = s => String(s).replace(/_/g, " ");
+  const hubRows = hh ? [hh.name ? [c("hubName"), hh.name] : null, hh.product ? [c("hubProduct"), hh.product] : null, hh.model ? [c("hubModel"), hh.model] : null,
+    hh.maker ? [c("hubMaker"), hh.maker] : null, hh.type ? [c("hubType"), plainWords(hh.type)] : null, hh.room ? [c("hubRoom"), hh.room] : null,
+    [c("hubStatus"), (hubBad(hh) ? "⚠ " : "") + hubState(hh)],
+    hh.battery ? [c("battery"), t("card.hubBattery", { level: hh.battery.level, state: hh.battery.state ? t(ZLM.has("hue.batt." + hh.battery.state) ? "hue.batt." + hh.battery.state : "hue.batt.unknown") : "?" })] : null].filter(Boolean) : [];
+  const hubGroup = S.hue.configured ? `<div class="detailGroup hub"><h3>${esc(t("detail.hub"))}</h3>` + (hh ? dl(hubRows) : `<p class="note">${esc(t(n.ieee ? "detail.hubUnknown" : "detail.hubNoIeee"))}</p>`) + `</div>` : "";
   $("detailName").textContent = label(sel);
   $("cardBody").innerHTML =
     `<div class="detailGroup"><h3>${esc(t("detail.clear"))}</h3>${dl(clear)}` +
     (links ? `<div class="note">${esc(c("links"))}</div><ul>${links}</ul>` : "") +
     `<p>${Object.entries(n.cats).sort((a, b) => b[1] - a[1]).map(([cat, k]) => chip(cat, ` <span class="n">${k}</span>`)).join(" ")}</p></div>` +
+    hubGroup +
     `<div class="detailGroup keyed"><h3>${esc(t("detail.keyed"))}</h3>` +
     (keyed.length || costs
       ? (keyed.length ? dl(keyed) : "") + (costs ? `<div class="note">${esc(c("costs"))}</div><ul class="costs">${costs}</ul>` : "")
@@ -659,6 +681,16 @@ function renderCard() {
 function findIssues() {
   const out = [];
   if (S.security && S.security.vulnerable) out.push({ weight: 100, node: null, text: t("issues.vulnerable") });
+  if (S.hue.configured && S.hue.error) out.push({ weight: 6, node: null, text: t("issues.hueError", { error: S.hue.error }) });
+  // Listening on another channel than the bridge's network: say it once, rather than blaming each device for never being heard.
+  const wrongChannel = S.mode === "live" && S.hue.configured && S.hue.channel != null && S.channel != null && S.hue.channel !== S.channel;
+  if (wrongChannel) out.push({ weight: 7, node: null, text: t("issues.hueChannel", { bridge: S.hue.channel, sniffer: S.channel }) });
+  for (const [ieee, h] of Object.entries(S.hue.configured ? S.hue.devices : {})) if (hubBad(h)) {   // the hub knows devices the radio may never have carried
+    const addr = S.ieee2addr.get(ieee), heard = !!addr && S.nodes.has(addr);
+    if (wrongChannel && !heard) continue;
+    const name = (S.names[ieee] && S.names[ieee].name) || h.name || ieee;
+    out.push({ weight: 4.5, node: heard ? addr : null, text: t(heard ? "issues.hue" : "issues.hueUnheard", { name, state: hubState(h) }) });
+  }
   for (const [addr, costRows] of Object.entries(S.costs)) for (const r of costRows) {
     const worst = Math.max(r.incoming, r.outgoing);
     if (worst >= 5) out.push({ weight: 5 + worst / 10, node: addr, text: t("issues.cost", { a: label(addr), b: label(r.addr), in: r.incoming, out: r.outgoing }) });
@@ -834,6 +866,7 @@ async function connect() {
       S.focusIeee = (d.mode !== "demo" && prefs.get("focus", null)) || d.focus || null;
       if (d.security) S.security = d.security;
       S.identities = d.identities || {}; S.costs = d.linkCosts || {}; S.batteries = d.batteries || {};
+      S.hue = d.hue || { configured: false, devices: {} }; ZLM.hueChanged(S.hue);
       $("chanBox").hidden = !S.canTune; if (S.channel) $("chan").value = S.channel;
       $("log").innerHTML = ""; issuesShown = "\u0000"; dirty.devices = dirty.card = dirty.legend = dirty.security = true; renderLegend(true);
     }
@@ -842,6 +875,7 @@ async function connect() {
     else if (d.type === "names") { setNames(d.names, d.vendors); dirty.devices = dirty.card = true; renderLog(); }
     else if (d.type === "vendors") { Object.assign(S.vendors, d.vendors); dirty.card = true; }
     else if (d.type === "security") { const { type, ...rest } = d; S.security = rest; dirty.security = true; dirty.card = true; issuesShown = "\u0000"; }
+    else if (d.type === "hue") { const { type, ...rest } = d; S.hue = rest; ZLM.hueChanged(rest); dirty.card = dirty.devices = true; issuesShown = "\u0000"; }
     else if (d.type === "identity") { S.identities[d.addr] = d.id; dirty.card = dirty.devices = true; }
     else if (d.type === "linkcosts") { S.costs[d.addr] = d.rows; dirty.card = true; issuesShown = "\u0000"; }
     else if (d.type === "battery") { S.batteries[d.addr] = d.batt; dirty.card = dirty.devices = true; issuesShown = "\u0000"; }

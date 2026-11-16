@@ -7,7 +7,7 @@ requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 keywords = ["zigbee", "802.15.4", "sniffer", "cc2531", "visualization", "home-automation"]
-dependencies = ["aiohttp>=3.9", "pyusb>=1.2", "truststore>=0.9", "cryptography>=42"]
+dependencies = ["aiohttp>=3.9", "pyusb>=1.2", "truststore>=0.9", "cryptography>=42", "zeroconf>=0.130"]
 
 [project.scripts]
 zigbee-live-map = "zigbee_live_map.cli:main"

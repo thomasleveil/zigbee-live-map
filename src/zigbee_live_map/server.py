@@ -30,9 +30,10 @@ from urllib.parse import urlsplit
 
 from aiohttp import WSMsgType, web
 
-from . import __version__, crypto, decode, demo, keys as keystore
+from . import __version__, crypto, decode, demo, hue as huemod, keys as keystore
 from .devices import DeviceError, DeviceStore
 from .frames import Classifier, read_pcap
+from .hue import HueService
 from .keys import KeyStore
 from .vendors import Registry, VendorError
 
@@ -61,9 +62,12 @@ def list_locales() -> list[dict]:
 class Hub:
     """Keeps the recent events and fans every new one out to the connected pages."""
 
-    def __init__(self, store: DeviceStore, registry: Registry, info: dict, backlog: int, keys: KeyStore | None = None) -> None:
+    def __init__(self, store: DeviceStore, registry: Registry, info: dict, backlog: int, keys: KeyStore | None = None,
+                 hue: HueService | None = None) -> None:
         self.store, self.registry, self.info = store, registry, info
         self.keys = keys if keys is not None else KeyStore(None)
+        self.hue = hue if hue is not None else HueService(None)   # memory only, and silent until the user sets a bridge up
+        self.hue.on_change = self.hue_changed
         self.status = {"type": "status", "sniffer": "starting", "detail": ""}
         self.events: deque = deque(maxlen=backlog)
         self.clients: set[web.WebSocketResponse] = set()
@@ -81,6 +85,13 @@ class Hub:
         self.batteries: dict[str, dict] = {}      # NWK short address -> {percent} or {volts}
         self.pan: str | None = None               # the dominant PAN heard, used to pick a saved key
         self._pan_counts: dict[str, int] = {}
+
+    def names(self) -> dict[str, dict]:
+        """What the pages call a device: the user's lists first, the bridge's own name for any device no list names.
+
+        Computed on the way out and written nowhere: the lists stay exactly what the user made them.
+        """
+        return {**self.hue.fallback_names(), **self.store.merged()}
 
     def vendors(self) -> dict[str, str]:
         known = set(self.store.merged()) | set(self.heard)
@@ -109,7 +120,7 @@ class Hub:
         await self.send_all({"type": "security", **self.security_state()})
 
     def hello(self) -> dict:
-        return {"type": "hello", "version": __version__, **self.info, "names": self.store.merged(),
+        return {"type": "hello", "version": __version__, **self.info, "names": self.names(), "hue": self.hue.view(),
                 "vendors": self.vendors(), "security": self.security_state(),
                 "identities": self.identities, "linkCosts": self.link_quality, "batteries": self.batteries}
 
@@ -178,7 +189,12 @@ class Hub:
         await self.send_all(self.status)
 
     async def names_changed(self) -> None:
-        await self.send_all({"type": "names", "names": self.store.merged(), "vendors": self.vendors()})
+        await self.send_all({"type": "names", "names": self.names(), "vendors": self.vendors()})
+
+    async def hue_changed(self) -> None:
+        """The bridge was read, set up or forgotten: the pages get the new names, then what the hub says about each device."""
+        await self.names_changed()
+        await self.send_all({"type": "hue", **self.hue.view()})
 
     async def tune(self, channel: int) -> None:
         if self.source is None or channel not in range(11, 27) or channel == self.info["channel"]:
@@ -472,6 +488,36 @@ async def api_keys_delete(request: web.Request) -> web.Response:
     return web.json_response({"keys": hub.keys.describe(), "pan": hub.pan, "security": hub.security_state()})
 
 
+# The Hue Bridge. Everything that causes a network call is a guarded change (POST/DELETE), never a plain read:
+# a plain read is open to any page in the browser, so it must not be able to make this tool dial anything.
+
+async def api_hue(request: web.Request) -> web.Response:
+    return web.json_response(request.app[HUB].hue.status())
+
+
+async def api_hue_discover(request: web.Request) -> web.Response:
+    return web.json_response({"bridges": await huemod.discover()})
+
+
+async def api_hue_pair(request: web.Request) -> web.Response:
+    return web.json_response(await request.app[HUB].hue.start_pairing((await _json(request)).get("host")))
+
+
+async def api_hue_key(request: web.Request) -> web.Response:
+    data = await _json(request)
+    return web.json_response(await request.app[HUB].hue.set_key(data.get("host"), data.get("key")))
+
+
+async def api_hue_refresh(request: web.Request) -> web.Response:
+    hub: Hub = request.app[HUB]
+    await hub.hue.refresh()
+    return web.json_response(hub.hue.status())
+
+
+async def api_hue_forget(request: web.Request) -> web.Response:
+    return web.json_response(await request.app[HUB].hue.forget())
+
+
 async def api_vendors(request: web.Request) -> web.Response:
     return web.json_response(request.app[HUB].registry.meta)
 
@@ -524,7 +570,10 @@ def build_app(hub: Hub) -> web.Application:
         web.post("/api/lists/{list}/fill-identities", api_fill), web.post("/api/lists/{list}/import", api_import), web.get("/api/lists/{list}/export", api_export),
         web.get("/api/session", api_session), web.get("/api/vendors", api_vendors), web.post("/api/vendors/refresh", api_vendors_refresh),
         web.get("/api/keys", api_keys), web.put("/api/keys/{pan}", api_keys_set), web.delete("/api/keys/{pan}", api_keys_delete),
+        web.get("/api/hue", api_hue), web.delete("/api/hue", api_hue_forget), web.post("/api/hue/discover", api_hue_discover),
+        web.post("/api/hue/pair", api_hue_pair), web.post("/api/hue/key", api_hue_key), web.post("/api/hue/refresh", api_hue_refresh),
     ])
+    app.on_cleanup.append(lambda _app: hub.hue.stop())
     return app
 
 
@@ -539,7 +588,9 @@ async def serve(args) -> None:
     data_dir = Path(args.data_dir).expanduser()
     store = demo_store() if mode == "demo" else DeviceStore(data_dir)
     info = {"channel": args.channel if mode == "live" else None, "mode": mode, "focus": args.focus, "can_tune": mode == "live"}
-    hub = Hub(store, Registry(data_dir), info, args.backlog, keys=KeyStore(None if mode == "demo" else data_dir))
+    hub = Hub(store, Registry(data_dir), info, args.backlog, keys=KeyStore(None if mode == "demo" else data_dir),
+              hue=HueService(None if mode == "demo" else data_dir))
+    hub.hue.start()   # only reads a bridge the user set up in an earlier session; nothing at all otherwise
     queue: asyncio.Queue = asyncio.Queue()
     tasks = [asyncio.create_task(pump(queue, hub))]
     if mode == "demo":

@@ -28,7 +28,7 @@ button, input, select { font: inherit; color: inherit; }
 button, select, a.btn { cursor: pointer; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: .3rem .7rem; color: var(--ink); text-decoration: none; display: inline-block; }
 button[aria-pressed="true"] { border-color: var(--accent); }
 button:disabled { opacity: .6; cursor: default; }
-input[type="text"], input:not([type]) { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: .3rem .5rem; color: var(--ink); }
+input[type="text"], input[type="password"], input:not([type]) { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: .3rem .5rem; color: var(--ink); }
 input[type="checkbox"], input[type="radio"] { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); }
 :focus-visible { outline: 3px solid var(--focusring); outline-offset: 2px; }
 .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
@@ -66,3 +66,14 @@ dialog.settings::backdrop { background: rgba(2, 4, 10, .6); }
 .keyform .wide { grid-column: 1 / -1; }
 .keyform button { align-self: end; }
 @media (max-width: 480px) { .keyform { grid-template-columns: 1fr; } }
+
+/* Hue Bridge (settings dialog, both pages) */
+.huefound { list-style: none; margin: .4rem 0; padding: 0; display: grid; gap: .3rem; }
+.huefound li { display: flex; flex-wrap: wrap; gap: .3rem .6rem; align-items: baseline; border: 1px solid var(--line); border-radius: 6px; padding: .4rem .6rem; background: var(--panel2); }
+.huefound li span { flex: 1; min-width: 12rem; word-break: break-word; }
+.hueform { display: grid; grid-template-columns: 1fr auto; gap: .4rem; align-items: end; margin-top: .6rem; }
+.hueform label { display: grid; gap: .15rem; font-size: .9rem; color: var(--muted); }
+.hueform input { width: 100%; }
+.hueform .wide { grid-column: 1; }
+@media (max-width: 480px) { .hueform { grid-template-columns: 1fr; } }
+#zlmHueManage[hidden], #zlmHueSetup[hidden] { display: none; }

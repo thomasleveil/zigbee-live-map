@@ -92,6 +92,24 @@ The first bytes of an IEEE address are a prefix that the IEEE assigns to a compa
 
 A snapshot of the [IEEE registry](https://standards-oui.ieee.org/) ships with the tool. Update it from *Settings*, or with `zigbee-live-map --update-vendors`. This downloads three public files and sends nothing about your network. It never happens on its own.
 
+## Hue Bridge
+
+If you have a Philips Hue Bridge, the tool can ask it what it knows. A sniffer cannot read names, models or rooms, and cannot tell a device that is gone from one that is merely quiet. The bridge can.
+
+Once a bridge is set up, every Zigbee device it manages is matched to the map on its IEEE address, and the device sheet gets a **From the hub** group: the bridge's own name, product, model id, maker, type, room, battery level when the bridge has one, and whether the bridge can reach the device. A device the bridge reports as anything other than connected is marked on the map with a warning triangle and "⚠" before its name, and the *Things to look at* panel lists it, including devices the bridge knows and the sniffer has never heard: the bridge sees them, the radio does not, and that is the diagnostic. The bridge's own Zigbee channel is shown in *Settings*, and when the bridge's network is on a different channel than the one the sniffer listens on (live mode), *Things to look at* says so once, since none of its devices can be heard then. A name you keep in a list always wins; where a device has no name in any list, the map and the log show the bridge's name. Nothing is written into your lists.
+
+**Set it up** from *Settings*, *Hue Bridge*:
+
+1. *Find bridges on my network* lists the bridges that answer on the local network (mDNS). Multicast often does not reach into a container or a virtual machine; then type the address (IP, name, or `address:port`) instead.
+2. Click *Pair*, then press the big button on the bridge. The tool asks for an application key every two seconds for 30 seconds. Or, if you already have a key, type it in *Use this key*.
+3. The bridge is read at once, then every 30 seconds, and with *Read the bridge now*. *Forget this bridge* removes everything.
+
+The application key is kept in `hue.json` in your data directory, readable by you only, and in memory only in `--demo` mode. It never leaves the tool's server: no page, message, log line or error shows it.
+
+**Trust.** The bridge speaks HTTPS with a certificate that no public authority vouches for, so the tool pins it. The first time you set a bridge up, it records the SHA-256 fingerprint of the certificate the bridge presents and checks that the certificate's common name equals the bridge id the bridge announces. Every later request must present that exact certificate, checked before anything is sent; a different one is refused with a plain message, and you forget the bridge and set it up again. Only addresses on your own network (private, link-local, loopback) are ever contacted.
+
+**What it does not give.** The Hue API exposes no link-quality figure (no LQI, no RSSI) anywhere, so none is shown. The *Diagnostics* signs below still come from the sniffer alone.
+
 ## Diagnostics
 
 The devices keep their own measurements to themselves: link quality figures and queue states travel encrypted or not at all. What a listener can see is the consequences, and those are what the *Things to look at* panel reports.
@@ -150,7 +168,7 @@ The header decoder has no dependency beyond the standard library. Its output was
 
 - **Receive only.** The sniffer firmware cannot transmit, and this tool never sends anything on the radio.
 - **Headers only.** Everything after the NWK header is encrypted with your network key. The tool does not ask for the key and does not decrypt. It shows who talks to whom, when and how much, never what is said. Network commands are recognised by their shape and labelled "probable" when that is a deduction.
-- **Local only.** The server listens on `127.0.0.1` and answers only requests addressed to that local address. It grants no cross-origin access, so another website cannot read anything through your browser, and it refuses any change or live connection that does not carry a token only its own page can obtain. The only outbound connection is the registry update, and only when you ask for it.
+- **Local only.** The server listens on `127.0.0.1` and answers only requests addressed to that local address. It grants no cross-origin access, so another website cannot read anything through your browser, and it refuses any change or live connection that does not carry a token only its own page can obtain. The only outbound connections are the registry update, and your Hue Bridge once you set it up (see [Hue Bridge](#hue-bridge)): the first on your request, the second only to a bridge on your own network. Without a bridge set up, and in `--demo`, the tool contacts none.
 - **Your data stays out of the repository.** Device lists live in your home directory, and `*.pcap` is in `.gitignore`. A capture contains your devices' addresses: think before sharing one.
 - Traffic of a neighbouring network on the same channel is recognised by its PAN id and kept off the map. Use this on networks you own or are allowed to monitor.
 
@@ -181,6 +199,14 @@ uv run zigbee-live-map --demo --speed 3
 ```
 
 The pages have no build step: `static/index.html` is the map, `static/devices.html` the device lists, `static/common.js` and `static/common.css` what they share. The demo network in `demo.py` produces well-formed frames, so the whole pipeline can be exercised without a dongle.
+
+The Hue integration has a fake bridge too (HTTPS, self-signed, the same pairing and reads). Run it beside the demo, then set it up from *Settings* with the address `127.0.0.1:8795` and the application key it prints:
+
+```sh
+uv run python tests/fake_hue_bridge.py --port 8795 --demo
+```
+
+Its devices are those of the demo network, in a few rooms, with one that has connection problems, one that is not reachable, and one the demo network does not contain. The demo's own names win on the map; switch the *Demo network* list off on the *Known devices* page to see the bridge's names.
 
 To refresh the registry snapshot shipped with the package:
 
