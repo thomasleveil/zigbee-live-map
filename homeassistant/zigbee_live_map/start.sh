@@ -23,14 +23,17 @@ else
     set -- "$@" --channel "$(opt '.channel // 11')"
 fi
 
-for name in $(opt '.allowed_hosts[]?'); do
-    set -- "$@" --allowed-host "$name"
-done
-
-# The password only matters for a published port. It goes in the environment, never on the command line.
+# The password and the allowed hosts only matter for a published port. The password goes in the environment,
+# never on the command line. Host names are only checked where people sign in, and the tool refuses to start with
+# names and no password: so without a password they are left out, with a line in the log saying so.
 password="$(opt '.password // empty')"
 if [ -n "$password" ]; then
     export ZLM_PASSWORD="$password"
+    for name in $(opt '.allowed_hosts[]?'); do
+        set -- "$@" --allowed-host "$name"
+    done
+elif [ -n "$(opt '.allowed_hosts[]?')" ]; then
+    echo "zigbee-live-map: allowed_hosts is ignored because no password is set (a published port needs both)" >&2
 fi
 
 exec "$@"

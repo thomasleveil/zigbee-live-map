@@ -4,7 +4,7 @@ The pages carry secrets (network keys, the live traffic), so every request is so
 three access channels, decided in one place (`access.Access.channel`) from how the server was started and
 from the address of the TCP connection, never from a header:
 
-- local: the server was started on a loopback address (the default, 127.0.0.1). A web site you visit must
+- local: the server was started on a loopback address (the default, 127.0.0.1) and has no password. A web site you visit must
   not be able to use your browser to read your radio traffic or edit your device lists. Three rules do that:
   every request must be addressed to the local host name, which stops DNS rebinding; plain reads (GET) are
   answered without any cross-origin permission, so the browser itself keeps another site from seeing the
@@ -12,15 +12,19 @@ from the address of the TCP connection, never from a header:
   by a plain read, which therefore only this tool's own page can obtain. The Origin header is not compared
   to an exact value: browsers and extensions rewrite it in ways that cannot be predicted (some drop the
   port). When present it must still name the local host.
-- ingress: started with --ingress, and the peer is the Home Assistant supervisor (172.30.32.2), the only
-  address Home Assistant's ingress proxy connects from. Home Assistant has already signed the user in, so
-  there is no login, and Host and Origin are not checked (behind the proxy they are Home Assistant's). The
-  token is still required for every change and for /ws.
-- lan: every other request on a non-loopback bind, loopback peers included. The Host must be the address of
-  the socket the request arrived on, or an --allowed-host name; every route needs a signed-in session
-  (a random cookie kept in memory) except the login page, its POST, the static files and the locale files;
-  changes and /ws also need the token, and an Origin, when present, must name an allowed host. Without a
-  password (--ingress alone) nobody can sign in, so every lan request is refused.
+- ingress: started with --ingress (which only starts inside a Home Assistant app: it needs SUPERVISOR_TOKEN)
+  on a network bind, and the peer is the Home Assistant supervisor (172.30.32.2), the only address Home
+  Assistant's ingress proxy connects from. Home Assistant has already signed the user in, so there is no
+  login, and Host and Origin are not checked (behind the proxy they are Home Assistant's). The token is still
+  required for every change and for /ws.
+- lan: every other request, on any bind that is not "loopback with no password", loopback peers included (a
+  reverse proxy in front of a loopback bind connects from loopback). The Host must be the address of the
+  socket the request arrived on, or an --allowed-host name; every route needs a signed-in session (a random
+  cookie, named after the listening port, kept in memory and valid only from the address that signed in)
+  except the login page, its POST, the static files and the locale files; changes and /ws also need the
+  session's own token, which dies with the session, and an Origin, when present, must name an allowed host.
+  Signing out also closes the session's open live connections. Without a password (--ingress alone) nobody
+  can sign in, so every lan request is refused.
 
 Outside the ingress channel the pages cannot be framed by another site. The pages use relative URLs only,
 so they work at "/" and under any path prefix a reverse proxy puts in front of them.
@@ -42,10 +46,10 @@ from importlib import resources
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from aiohttp import WSMsgType, web
+from aiohttp import WSCloseCode, WSMsgType, web
 
 from . import __version__, access as accessmod, crypto, decode, demo, keys as keystore
-from .access import COOKIE, INGRESS, LAN, LOCAL, Access, LoginGuard, Sessions
+from .access import INGRESS, LAN, LOCAL, Access, LoginGuard, Sessions
 from .devices import DeviceError, DeviceStore
 from .frames import Classifier, read_pcap
 from .hue import HueService
@@ -354,6 +358,7 @@ TOKEN = web.AppKey("token", str)
 ACCESS = web.AppKey("access", Access)
 SESSIONS = web.AppKey("sessions", Sessions)
 GUARD = web.AppKey("login_guard", LoginGuard)
+SOCKETS = web.AppKey("session_sockets", dict)   # session id -> its open live connections, so that signing out can end them
 CHANNEL = web.RequestKey("channel", str)   # which access channel this request fell into
 LOCAL_NAMES = {"127.0.0.1", "localhost"}
 GATE_TEXT = "zigbee-live-map refused this request: {}."
@@ -371,14 +376,31 @@ def _socket(request: web.Request) -> tuple[str, int]:
     return name[0], name[1]
 
 
+def _vanished(request: web.Request) -> bool:
+    """The connection is already gone (or is not a TCP one): there is no peer to judge and nobody to answer."""
+    transport = request.transport
+    return transport is None or transport.get_extra_info("peername") is None or transport.get_extra_info("sockname") is None
+
+
+def _sid(request: web.Request) -> str | None:
+    """The session cookie of this request: its name carries the port this server listens on."""
+    return request.cookies.get(accessmod.cookie_name(_socket(request)[1]))
+
+
+def _signed_in(request: web.Request) -> bool:
+    return request.app[SESSIONS].valid(_sid(request), _peer(request) or "")
+
+
 def _guarded(request: web.Request) -> bool:
     """A change, or the live connection: what needs the token."""
     return request.method not in ("GET", "HEAD") or request.path == "/ws"
 
 
 def _token_ok(request: web.Request) -> bool:
-    token = request.headers.get("X-ZLM-Token") or request.query.get("token") or ""
-    return hmac.compare_digest(token, request.app[TOKEN])
+    """On the sign-in channel the token belongs to the session, and dies with it; elsewhere it is the process-wide one."""
+    given = request.headers.get("X-ZLM-Token") or request.query.get("token") or ""
+    expected = request.app[SESSIONS].token(_sid(request) or "") if request[CHANNEL] == LAN else request.app[TOKEN]
+    return hmac.compare_digest(given.encode("utf-8", "replace"), expected.encode("utf-8", "replace"))   # bytes: a text with a non-ASCII letter makes compare_digest raise
 
 
 def _refuse(request: web.Request, reason: str) -> web.HTTPForbidden:
@@ -421,7 +443,7 @@ def ingress_rules(request: web.Request) -> web.HTTPException | None:
 
 
 def lan_rules(request: web.Request) -> web.HTTPException | None:
-    access, sessions = request.app[ACCESS], request.app[SESSIONS]
+    access = request.app[ACCESS]
     sock_ip, port = _socket(request)
     origin = request.headers.get("Origin")
     if not access.host_ok(request.host, sock_ip, port):   # first: before a login, a redirect or a 401 can teach a rebinding page anything
@@ -435,7 +457,7 @@ def lan_rules(request: web.Request) -> web.HTTPException | None:
     path = request.path
     if request.method in ("GET", "HEAD") and (path in ("/login", "/locales") or path.startswith(("/static/", "/locales/"))):
         return None
-    if not sessions.valid(request.cookies.get(COOKIE)):
+    if not _signed_in(request):
         return _unauthorized(request)
     if _guarded(request):
         if origin is not None and not access.origin_ok(origin, sock_ip):
@@ -450,6 +472,8 @@ CHANNEL_RULES = {LOCAL: local_rules, INGRESS: ingress_rules, LAN: lan_rules}
 
 @web.middleware
 async def access_control(request: web.Request, handler):
+    if _vanished(request):
+        raise web.HTTPForbidden(text=GATE_TEXT.format("its connection is gone"))
     channel = request.app[ACCESS].channel(_peer(request))   # the one place the channel is decided
     request[CHANNEL] = channel
     refusal = CHANNEL_RULES[channel](request)
@@ -489,7 +513,7 @@ def _login_page(failed: bool = False, status: int = 200) -> web.Response:
 async def handle_login_page(request: web.Request) -> web.Response:
     if request[CHANNEL] != LAN:
         raise web.HTTPNotFound()   # nothing to sign in to here
-    if request.app[SESSIONS].valid(request.cookies.get(COOKIE)):
+    if _signed_in(request):
         raise web.HTTPFound("./")
     return _login_page()
 
@@ -513,15 +537,24 @@ async def handle_login(request: web.Request) -> web.Response:
         return _login_page(failed=True, status=401)
     guard.succeeded(peer)
     response = web.Response(status=303, headers={"Location": "./", "Cache-Control": "no-store"})
-    response.set_cookie(COOKIE, sessions.start(), max_age=accessmod.SESSION_TTL, path="/", httponly=True, samesite="Strict",
+    response.set_cookie(accessmod.cookie_name(_socket(request)[1]), sessions.start(peer), max_age=accessmod.SESSION_TTL, path="/", httponly=True, samesite="Strict",
                         secure=request.headers.get("X-Forwarded-Proto") == "https")   # behind a TLS proxy the browser must not send it in clear
     return response
 
 
 async def handle_logout(request: web.Request) -> web.Response:
-    request.app[SESSIONS].end(request.cookies.get(COOKIE))
+    """Ends the session, and with it every live connection it opened: a page left open must not go on streaming keys."""
+    sid, name = _sid(request), accessmod.cookie_name(_socket(request)[1])
+    request.app[SESSIONS].end(sid)
+    sockets = request.app[SOCKETS].pop(sid, set()) if sid else set()
+    hub: Hub = request.app[HUB]
+    for ws in sockets:
+        hub.clients.discard(ws)   # nothing more is sent to it, whatever the close handshake takes
+    if sockets:
+        closing = [asyncio.create_task(ws.close(code=WSCloseCode.POLICY_VIOLATION, message=b"signed out")) for ws in sockets]
+        await asyncio.wait(closing, timeout=3)   # a client that does not answer the close does not hold the sign-out back
     response = web.json_response({})
-    response.del_cookie(COOKIE, path="/")
+    response.del_cookie(name, path="/")
     return response
 
 
@@ -627,7 +660,9 @@ async def api_export(request: web.Request) -> web.Response:
 
 
 async def api_session(request: web.Request) -> web.Response:
-    return web.json_response({"token": request.app[TOKEN], "signOut": request[CHANNEL] == LAN}, headers={"Cache-Control": "no-store"})
+    lan = request[CHANNEL] == LAN
+    token = request.app[SESSIONS].token(_sid(request) or "") if lan else request.app[TOKEN]   # (a lan request that got here is signed in)
+    return web.json_response({"token": token, "signOut": lan}, headers={"Cache-Control": "no-store"})
 
 
 async def api_keys(request: web.Request) -> web.Response:
@@ -710,12 +745,21 @@ async def handle_ws(request: web.Request) -> web.StreamResponse:
     hub: Hub = request.app[HUB]
     ws = web.WebSocketResponse(heartbeat=20)
     await ws.prepare(request)
+    sid = _sid(request) if request[CHANNEL] == LAN else None
+    sockets: dict = request.app[SOCKETS]
+    if sid is not None:   # no await between the check and the registration: a sign-out during the handshake is seen here, a later one closes this socket
+        if not _signed_in(request):
+            await ws.close(code=WSCloseCode.POLICY_VIOLATION, message=b"signed out")
+            return ws
+        sockets.setdefault(sid, set()).add(ws)
     await ws.send_json(hub.hello())
     await ws.send_json(hub.status)
     await ws.send_str(json.dumps({"type": "backlog", "events": list(hub.events)}, separators=(",", ":")))
     hub.clients.add(ws)
     try:
         async for msg in ws:
+            if sid is not None and ws not in sockets.get(sid, ()):
+                break   # signed out while a message was on its way: it is not carried out
             if msg.type != WSMsgType.TEXT:
                 continue
             try:
@@ -731,6 +775,8 @@ async def handle_ws(request: web.Request) -> web.StreamResponse:
                 await hub.tune(data["channel"])
     finally:
         hub.clients.discard(ws)
+        if sid is not None:
+            sockets.get(sid, set()).discard(ws)
     return ws
 
 
@@ -742,6 +788,7 @@ def build_app(hub: Hub, access: Access | None = None, clock=time.monotonic) -> w
     app[ACCESS] = access if access is not None else Access()
     app[SESSIONS] = Sessions(clock)
     app[GUARD] = LoginGuard(clock)
+    app[SOCKETS] = {}
     app.on_response_prepare.append(_response_headers)
     app.add_routes([
         web.get("/", handle_page), web.get("/devices", handle_page), web.get("/ws", handle_ws),
@@ -773,7 +820,7 @@ async def serve(args, access: Access | None = None) -> None:
     store = demo_store() if mode == "demo" else DeviceStore(data_dir)
     info = {"channel": args.channel if mode == "live" else None, "mode": mode, "focus": args.focus, "can_tune": mode == "live"}
     hub = Hub(store, Registry(data_dir), info, args.backlog, keys=KeyStore(None if mode == "demo" else data_dir),
-              hue=HueService(None if mode == "demo" else data_dir, allow_loopback=access.loopback))
+              hue=HueService(None if mode == "demo" else data_dir, allow_loopback=access.local))
     hub.hue.start()   # only reads a bridge the user set up in an earlier session; nothing at all otherwise
     queue: asyncio.Queue = asyncio.Queue()
     tasks = [asyncio.create_task(pump(queue, hub))]
@@ -794,6 +841,8 @@ async def serve(args, access: Access | None = None) -> None:
     if not access.loopback:
         print(f"  reachable from your network on port {port}, as plain HTTP" + ("; password required" if access.password else "")
               + ("; Home Assistant ingress accepted" if access.ingress else ""), flush=True)
+    elif access.password:
+        print("  this computer only, but sign-in is required (a password is set)", flush=True)
     if args.open:
         import webbrowser
 

@@ -193,6 +193,19 @@ def test_try_locally_stands_in_for_the_supervisor_faithfully():
     assert len(names) == 4 and all(n.startswith("zlm-") for n in names), names
 
 
+def test_try_locally_plays_the_supervisor_with_a_dummy_token_on_purpose():
+    """--ingress starts only where the Supervisor set SUPERVISOR_TOKEN: the stand-in sets one, says it is a dummy, and the tool accepts it."""
+    script = (ROOT / "homeassistant" / "try-locally.sh").read_text(encoding="utf-8")
+    start = script.index('docker run -d --name "$APP"')
+    app_container = script[start:script.index(">/dev/null", start)]
+    assert re.search(rf"-e {access.SUPERVISOR_ENV}=dummy\S*", app_container)   # on the app container, not on the proxy
+    comment = script[:start].rsplit("\n\n", 1)[-1]
+    assert "dummy" in comment and "on purpose" in comment and "Supervisor" in comment
+    args = cli.parser().parse_args(["--host", "0.0.0.0", "--ingress"])
+    assert access.from_args(args, {access.SUPERVISOR_ENV: "dummy-not-a-supervisor-token"}).ingress
+    assert access.SUPERVISOR_ENV == "SUPERVISOR_TOKEN"   # the name Home Assistant documents (contributors.home-assistant.io/apps/reference/environment/)
+
+
 @pytest.mark.parametrize("name", ["config.yaml", "Dockerfile", "start.sh", "DOCS.md", "translations/en.yaml", "../try-locally.sh"])
 def test_no_machine_path_or_private_value_in_the_app_files(name):
     text = (APP / name).read_text(encoding="utf-8")

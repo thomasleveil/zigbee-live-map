@@ -3,9 +3,11 @@
 Each request falls into exactly one channel, decided in one place (`Access.channel`) from how the server
 was started and from the address the request really came from:
 
-- local:   the server was started on a loopback address. Nothing here changes its rules.
-- ingress: started with --ingress, and the peer is the Home Assistant supervisor (`SUPERVISOR`).
-- lan:     everything else on a non-loopback bind: a host allowlist and a password.
+- local:   the server was started on a loopback address and has NO password. Nothing here changes its rules.
+- ingress: started with --ingress on a network bind, and the peer is the Home Assistant supervisor (`SUPERVISOR`).
+- lan:     everything else: a host allowlist, a password, a session. A password means sign-in on every bind, a
+           loopback one included: a reverse proxy in front of a loopback bind reaches the tool from loopback, yet
+           its visitors are anyone who can reach the proxy.
 
 The peer is always the address of the TCP connection. A header (X-Forwarded-For, X-Ingress-Path,
 X-Remote-User-Id...) is something any client can write, so no access decision rests on one. (The one header the server reads, X-Forwarded-Proto, only decides whether the session cookie is marked Secure.)
@@ -27,9 +29,10 @@ from urllib.parse import urlsplit
 
 SUPERVISOR = "172.30.32.2"   # where Home Assistant's ingress proxy connects from; no flag changes it (see Access.supervisor)
 LOCAL, INGRESS, LAN = "local", "ingress", "lan"
-COOKIE = "zlm_session"
+COOKIE = "zlm_session"   # the prefix of the cookie's name: see cookie_name
 SESSION_TTL = 7 * 24 * 3600   # seconds since the session was last used
 PASSWORD_ENV = "ZLM_PASSWORD"
+SUPERVISOR_ENV = "SUPERVISOR_TOKEN"   # Home Assistant sets it in every app container (contributors.home-assistant.io/apps/reference/environment/)
 
 
 class AccessError(ValueError):
@@ -79,6 +82,13 @@ def authority(text: str) -> tuple[str, int | None] | None:
         return None
 
 
+def cookie_name(port: int) -> str:
+    """Cookies are shared by every port of a host, so a fixed name would be sent to other services on this machine and
+    overwritten by another instance. A name that carries the listening port keeps each instance's cookie its own (a browser
+    may still send it elsewhere; sessions are in memory and bound to the address that signed in, so it is no use there)."""
+    return f"{COOKIE}_{port}"
+
+
 def parse_allowed_host(text: str) -> tuple[str, int | None]:
     found = authority(text.strip())
     if found is None:
@@ -121,16 +131,24 @@ class Access:
         object.__setattr__(self, "loopback", is_loopback(self.host))
         if self.password is not None and not self.password.strip():
             raise AccessError("the password is empty: an empty password would let everyone in")
+        if self.allowed_hosts and self.password is None:
+            raise AccessError("--allowed-host needs a password: host names are only checked where people sign in. "
+                              f"Set the {PASSWORD_ENV} environment variable or pass --password-file FILE")
         if not self.loopback and self.password is None and not self.ingress:
             raise AccessError(f"{self.host} is reachable from your network, so it needs a password: set the {PASSWORD_ENV} environment "
                               "variable or pass --password-file FILE (or --ingress when it runs behind Home Assistant). "
                               "To keep it on this computer, use --host 127.0.0.1")
 
+    @property
+    def local(self) -> bool:
+        """This computer only and nobody to sign in: a loopback bind with no password."""
+        return self.loopback and self.password is None
+
     def channel(self, peer: str | None) -> str:
         """The one place the channel of a request is decided. `peer` is the address of the TCP connection."""
-        if self.loopback:
+        if self.local:
             return LOCAL
-        if self.ingress and (ip := ip_of(peer)) is not None and ip == ip_of(self.supervisor):
+        if self.ingress and not self.loopback and (ip := ip_of(peer)) is not None and ip == ip_of(self.supervisor):
             return INGRESS
         return LAN
 
@@ -142,7 +160,9 @@ class Access:
             return False
         name, given = found
         mine = ip_of(socket_ip)
-        if mine is not None and ip_of(name) == mine and given == port:
+        if mine is not None and ip_of(name) == mine and (given == port or (given is None and port == 80)):   # no port means the scheme's default, 80
+            return True
+        if self.loopback and name == "localhost" and given == port:   # a browser keeps "localhost" on this computer: it cannot be rebound
             return True
         return any(name == allowed and given in ((wanted,) if wanted is not None else (None, port)) for allowed, wanted in self.allowed_hosts)
 
@@ -155,7 +175,8 @@ class Access:
         if not name:
             return False
         mine = ip_of(socket_ip)
-        return (mine is not None and ip_of(name) == mine) or any(name.lower() == allowed for allowed, _ in self.allowed_hosts)
+        return ((mine is not None and ip_of(name) == mine) or (self.loopback and name.lower() == "localhost")
+                or any(name.lower() == allowed for allowed, _ in self.allowed_hosts))
 
     def password_ok(self, given: str) -> bool:
         """Constant time, and on digests so that neither the content nor the length of the password shows in the timing."""
@@ -179,42 +200,66 @@ def _digest(text: str) -> bytes:
 
 def from_args(args, env: Mapping[str, str] | None = None) -> Access:
     """The access settings of a parsed command line. An argument set that has none of the network options (an older caller) is a loopback bind."""
-    return Access(host=getattr(args, "host", Access.host), password=read_password(os.environ if env is None else env, getattr(args, "password_file", None)),
-                  ingress=getattr(args, "ingress", False), allowed_hosts=tuple(parse_allowed_host(h) for h in getattr(args, "allowed_host", [])))
+    env = os.environ if env is None else env
+    ingress = getattr(args, "ingress", False)
+    if ingress and not env.get(SUPERVISOR_ENV, "").strip():
+        raise AccessError(f"--ingress is for the Home Assistant app and only works inside one: it trusts the address {SUPERVISOR}, "
+                          f"which other networks (Docker, VPNs) also use, and {SUPERVISOR_ENV} is how it knows the Supervisor started it. "
+                          "Outside Home Assistant, use a password instead (ZLM_PASSWORD or --password-file)")
+    return Access(host=getattr(args, "host", Access.host), password=read_password(env, getattr(args, "password_file", None)),
+                  ingress=ingress, allowed_hosts=tuple(parse_allowed_host(h) for h in getattr(args, "allowed_host", [])))
 
 
 class Sessions:
-    """Signed-in browsers, in memory only: a restart signs everyone out."""
+    """Signed-in browsers, in memory only: a restart signs everyone out. A session belongs to the address that signed in."""
 
     MAX = 64
 
     def __init__(self, clock: Callable[[], float] = time.monotonic, ttl: float = SESSION_TTL) -> None:
         self.clock, self.ttl = clock, ttl
         self._last_used: dict[str, float] = {}
+        self._peers: dict[str, str] = {}
+        self._secret = secrets.token_bytes(32)   # makes every session's change token unforgeable without the session itself
 
-    def start(self) -> str:
+    def start(self, peer: str = "") -> str:
         now = self.clock()
         for stale in [sid for sid, used in self._last_used.items() if now - used > self.ttl]:
-            del self._last_used[stale]
+            self._drop(stale)
         while len(self._last_used) >= self.MAX:
-            del self._last_used[min(self._last_used, key=self._last_used.get)]
+            self._drop(min(self._last_used, key=self._last_used.get))
         sid = secrets.token_urlsafe(32)
         self._last_used[sid] = now
+        self._peers[sid] = _canonical(peer)
         return sid
 
-    def valid(self, sid: str | None) -> bool:
+    def valid(self, sid: str | None, peer: str = "") -> bool:
+        """Known, not expired, and presented from the address that signed in (behind a reverse proxy that is the proxy's, every time)."""
         used = self._last_used.get(sid or "")
-        if used is None:
+        if used is None or self._peers.get(sid, "") != _canonical(peer):
             return False
         now = self.clock()
         if now - used > self.ttl:
-            del self._last_used[sid]
+            self._drop(sid)
             return False
         self._last_used[sid] = now
         return True
 
     def end(self, sid: str | None) -> None:
-        self._last_used.pop(sid or "", None)
+        self._drop(sid or "")
+
+    def token(self, sid: str) -> str:
+        """What changes and the live connection must carry on the sign-in channel: derived from the session, so it dies with it."""
+        return hmac.new(self._secret, b"token:" + sid.encode("utf-8", "replace"), hashlib.sha256).hexdigest()
+
+    def _drop(self, sid: str) -> None:
+        self._last_used.pop(sid, None)
+        self._peers.pop(sid, None)
+
+
+def _canonical(peer: str | None) -> str:
+    """A peer address in one spelling (IPv4-mapped IPv6 as the IPv4 it is, no scope id)."""
+    ip = ip_of(peer)
+    return str(ip) if ip is not None else (peer or "")
 
 
 class Throttle:
@@ -222,6 +267,8 @@ class Throttle:
 
     FORGET = 600.0   # seconds without a failure after which the count starts again
     MAX_KEYS = 1024
+    COUNT_MAX = 1_000_000   # failures counted; more tells nothing more
+    EXPONENT_MAX = 62       # 2 ** 62 is far above any cap, and still an exact float
 
     def __init__(self, free: int, clock: Callable[[], float], base: float = 1.0, cap: float = 60.0) -> None:
         self.free, self.clock, self.base, self.cap = free, clock, base, cap
@@ -234,8 +281,9 @@ class Throttle:
     def failed(self, key: str) -> None:
         now = self.clock()
         count, _until, last = self._state.get(key, (0, 0.0, 0.0))
-        count = 1 if now - last > self.FORGET else count + 1
-        delay = min(self.cap, self.base * 2 ** (count - self.free - 1)) if count > self.free else 0.0
+        count = 1 if now - last > self.FORGET else min(count + 1, self.COUNT_MAX)
+        # The exponent is bounded: 2 ** 1024 does not fit a float, and an error here would skip the line below, after which wrong guesses are free.
+        delay = min(self.cap, self.base * 2 ** min(count - self.free - 1, self.EXPONENT_MAX)) if count > self.free else 0.0
         if key not in self._state and len(self._state) >= self.MAX_KEYS:
             del self._state[min(self._state, key=lambda k: self._state[k][2])]
         self._state[key] = (count, now + delay, now)
@@ -259,8 +307,10 @@ class LoginGuard:
         return max(self.peers.wait(peer), self.everyone.wait("*"))
 
     def failed(self, peer: str) -> None:
-        self.peers.failed(peer)
-        self.everyone.failed("*")
+        try:
+            self.peers.failed(peer)
+        finally:
+            self.everyone.failed("*")
 
     def succeeded(self, peer: str) -> None:
         self.peers.cleared(peer)

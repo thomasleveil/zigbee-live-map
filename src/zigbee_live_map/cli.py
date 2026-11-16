@@ -44,8 +44,9 @@ def parser() -> argparse.ArgumentParser:
                      f"which needs a password: set {access.PASSWORD_ENV} or use --password-file)")
     web.add_argument("--port", type=int, default=8765, help="port (default 8765)")
     web.add_argument("--password-file", metavar="FILE", help=f"file whose first line is the password for a network bind (or set {access.PASSWORD_ENV}; never given on the command line)")
-    web.add_argument("--allowed-host", action="append", default=[], metavar="NAME", help="a host name the page may be reached by, e.g. behind a reverse proxy (repeatable; with or without :port)")
-    web.add_argument("--ingress", action="store_true", help="accept Home Assistant's ingress proxy (172.30.32.2) without a login; for running as an add-on")
+    web.add_argument("--allowed-host", action="append", default=[], metavar="NAME", help="a host name the page may be reached by, e.g. behind a reverse proxy (repeatable; with or without :port; needs a password)")
+    web.add_argument("--ingress", action="store_true", help="accept Home Assistant's ingress proxy (172.30.32.2) without a login. Only for the Home Assistant app: "
+                     f"it refuses to start outside one (no {access.SUPERVISOR_ENV} in the environment)")
     web.add_argument("--open", action="store_true", help="open the page in your browser")
     web.add_argument("--data-dir", default=DEFAULT_DATA_DIR, metavar="DIR", help=f"where your device lists and registry updates are kept (default {DEFAULT_DATA_DIR})")
     web.add_argument("--focus", metavar="IEEE", help="start with this device watched (same as the Watch button in the page)")

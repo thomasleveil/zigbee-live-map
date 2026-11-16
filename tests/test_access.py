@@ -4,18 +4,23 @@ No test here binds anything but 127.0.0.1 on a port the system picks. A test tha
 (Access(host="0.0.0.0")) while the socket stays on loopback, and plays the Home Assistant supervisor with the
 `supervisor` parameter. Passwords and addresses are invented.
 
-Select a group with -k bind, allowed_host, "lan and auth", fail_closed, login or ingress.
+Select a group with -k bind, allowed_host, "lan and auth", fail_closed, login, ingress, password, cookie, token, logout or robust.
 """
 import asyncio
+import contextlib
 import hmac
 import json
 import re
 from http.cookies import SimpleCookie
 from importlib import resources
+from pathlib import Path
+from unittest.mock import Mock
 
 import aiohttp
 import pytest
-from aiohttp.test_utils import TestClient, TestServer
+from aiohttp import WSMsgType, web
+from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
+from prefix_proxy import make_app
 
 from zigbee_live_map import access as acc, cli, server
 from zigbee_live_map.access import Access, AccessError, LoginGuard, Sessions, Throttle, parse_allowed_host
@@ -75,6 +80,11 @@ async def ws_status(client, path, **kw):
     return 101
 
 
+def cookie_of(client):
+    """The name of the session cookie of the server behind `client`: it carries the port."""
+    return acc.cookie_name(client.server.port)
+
+
 def locale_keys(name):
     return json.loads(resources.files("zigbee_live_map").joinpath("static", "locales", name).read_text(encoding="utf-8"))
 
@@ -124,6 +134,7 @@ def test_bind_non_loopback_without_password_or_ingress_refuses_to_start(host, mo
 
 def test_bind_non_loopback_with_a_password_or_ingress_starts(monkeypatch, tmp_path, capsys):
     monkeypatch.delenv("ZLM_PASSWORD", raising=False)
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "synthetic-supervisor-token")   # --ingress starts only where Home Assistant started it
     calls = []
     _no_serve(monkeypatch, calls)
     secret = tmp_path / "pw"
@@ -307,7 +318,7 @@ def test_lan_auth_without_the_cookie_nothing_leaks(tmp_path):
 def test_lan_auth_a_forged_or_stale_cookie_is_not_a_session(tmp_path):
     async def scenario(client, hub):
         for value in ("", "x", "a" * 43, "../..", "zlm_session"):
-            found = await client.get("/api/keys", headers={"Cookie": f"zlm_session={value}"})
+            found = await client.get("/api/keys", headers={"Cookie": f"{cookie_of(client)}={value}"})
             assert found.status == 401
         assert (await client.get("/api/keys", headers={"Cookie": f"other={PASSWORD}"})).status == 401
 
@@ -355,19 +366,19 @@ def test_lan_auth_cookie_is_random_httponly_samesite_strict_and_kept_in_memory(t
         for _ in range(2):
             made = await sign_in(client)
             assert made.status == 303 and made.headers["Location"] == "./"
-            cookie = SimpleCookie(made.headers["Set-Cookie"])["zlm_session"]
+            cookie = SimpleCookie(made.headers["Set-Cookie"])[cookie_of(client)]
             assert cookie["httponly"] and cookie["samesite"] == "Strict" and cookie["path"] == "/" and not cookie["secure"]
             assert int(cookie["max-age"]) == acc.SESSION_TTL and len(cookie.value) >= 40
             assert PASSWORD not in "".join(made.headers.values())
             values.append(cookie.value)
         secure = await sign_in(client, headers={"X-Forwarded-Proto": "https"})   # behind a TLS proxy the cookie says so
-        assert SimpleCookie(secure.headers["Set-Cookie"])["zlm_session"]["secure"]
+        assert SimpleCookie(secure.headers["Set-Cookie"])[cookie_of(client)]["secure"]
         assert len(set(values)) == 2
 
     serve(scenario, tmp_path, lan())
 
     async def restarted(client, hub):   # a new process: nobody is signed in
-        found = await client.get("/api/keys", headers={"Cookie": f"zlm_session={values[0]}"})
+        found = await client.get("/api/keys", headers={"Cookie": f"{cookie_of(client)}={values[0]}"})
         assert found.status == 401
 
     serve(restarted, tmp_path, lan())
@@ -378,11 +389,11 @@ def test_lan_auth_logout_ends_the_session_on_the_server(tmp_path):
         assert (await sign_in(client)).status == 303
         session = await (await client.get("/api/session")).json()
         assert session["signOut"] is True
-        sid = client.session.cookie_jar.filter_cookies(client.make_url("/"))["zlm_session"].value
+        sid = client.session.cookie_jar.filter_cookies(client.make_url("/"))[cookie_of(client)].value
         out = await client.post("/logout", headers=guarded(client, session["token"]))
-        assert out.status == 200 and "zlm_session" in out.headers["Set-Cookie"]
+        assert out.status == 200 and cookie_of(client) in out.headers["Set-Cookie"]
         for _ in range(2):   # even a browser that kept the old cookie is out
-            assert (await client.get("/api/keys", headers={"Cookie": f"zlm_session={sid}"})).status == 401
+            assert (await client.get("/api/keys", headers={"Cookie": f"{cookie_of(client)}={sid}"})).status == 401
 
     serve(scenario, tmp_path, lan())
 
@@ -680,3 +691,361 @@ def test_ingress_pages_can_be_framed_by_home_assistant_other_channels_cannot(tmp
     serve(ingress, tmp_path, Access(host="0.0.0.0", ingress=True, supervisor="127.0.0.1"))
     serve(other_channels, tmp_path, lan())
     serve(local, tmp_path)
+
+
+# ------------------------------------------------------------------------------------------ the throttle never stops working
+
+def test_login_throttle_never_stops_working_however_many_failures():
+    """2 ** 1024 does not fit a float: the doubling used to raise there, before the failure was stored, and from then on guesses were free."""
+    clock = Clock()
+    throttle = Throttle(3, clock)
+    for _ in range(10_000):
+        throttle.failed("peer")
+        clock.now += throttle.wait("peer")
+    throttle.failed("peer")
+    assert throttle.wait("peer") == throttle.cap
+
+    guard = LoginGuard(clock)   # many peers: every one is far from its own cap, the shared counter is not
+    for n in range(10_000):
+        guard.failed(f"peer{n % 3000}")
+        clock.now += guard.wait(f"peer{n % 3000}")
+    guard.failed("a peer never seen before")
+    assert guard.wait("a peer never seen before") == guard.everyone.cap   # one failure from a stranger, and everybody waits the cap
+    assert guard.wait("another one") == guard.everyone.cap
+
+
+def test_login_throttle_a_wrong_guess_is_never_a_500_after_ten_thousand_failures(tmp_path):
+    clock = Clock()
+
+    async def scenario(client, hub):
+        for _ in range(10_000):   # past 1,028 judged failures the doubling used to overflow
+            clock.now += 61   # the wait is over (its cap is 60 s), so every guess is judged
+            assert (await sign_in(client, "wrong")).status == 401
+        locked = await sign_in(client, PASSWORD)   # the wait is at its cap, the right password is not even compared
+        assert locked.status == 429 and locked.headers["Retry-After"] == "60"
+        assert (await sign_in(client, "wrong")).status == 429
+        clock.now += 60
+        assert (await sign_in(client, "wrong")).status == 401   # judged again
+        clock.now += 60
+        assert (await sign_in(client, PASSWORD)).status == 303
+
+    serve(scenario, tmp_path, lan(), clock=clock)
+
+
+# ------------------------------------------------------------------------------------------ a password means sign-in on every bind
+
+def test_password_on_a_loopback_bind_is_the_sign_in_channel_and_no_password_is_local():
+    assert Access().local and Access(host="::1").local and Access(host="127.0.0.1", ingress=True).local
+    protected = Access(host="127.0.0.1", password=PASSWORD)
+    assert not protected.local
+    for peer in ("127.0.0.1", "::1", "203.0.113.9", None):
+        assert protected.channel(peer) == acc.LAN
+    assert Access(host="127.0.0.1", password=PASSWORD, ingress=True, supervisor="127.0.0.1").channel("127.0.0.1") == acc.LAN   # a loopback bind has no supervisor to trust
+
+
+def test_password_on_a_loopback_bind_means_nothing_is_served_without_signing_in(tmp_path):
+    async def scenario(client, hub):
+        port = client.server.port
+        assert (await client.get("/login")).status == 200
+        assert (await client.get("/login", headers={"Host": f"localhost:{port}"})).status == 200   # this computer's own name for itself
+        assert (await client.get("/login", headers={"Host": "evil.example"})).status == 403
+        for path in PAGES:
+            found = await client.get(path, allow_redirects=False)
+            assert found.status == 302 and found.headers["Location"] == "login" and NET.hex() not in await found.text()
+        for path in ("/api/session", "/api/keys", "/api/lists", "/api/hue"):
+            found = await client.get(path, allow_redirects=False)
+            assert found.status == 401 and NET.hex() not in await found.text(), path
+        assert await ws_status(client, "/ws") == 401
+        assert (await client.post("/api/lists", json={"name": "x"})).status == 401
+        assert (await sign_in(client, "wrong")).status == 401
+        assert (await sign_in(client)).status == 303
+        assert NET.hex() in await (await client.get("/api/keys")).text()
+        session = await (await client.get("/api/session")).json()
+        assert session["signOut"] is True
+        assert (await client.post("/api/lists", json={"name": "x"}, headers=guarded(client, client.server.app[server.TOKEN]))).status == 403   # the process-wide token is not a session's
+        assert (await client.post("/api/lists", json={"name": "x"}, headers=guarded(client, session["token"]))).status == 200
+
+    serve(scenario, tmp_path, Access(host="127.0.0.1", password=PASSWORD))
+
+
+def test_allowed_host_without_a_password_is_refused_at_start_up(monkeypatch, capsys):
+    monkeypatch.delenv("ZLM_PASSWORD", raising=False)
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "synthetic-supervisor-token")
+    _no_serve(monkeypatch)
+    for argv in (["--host", "127.0.0.1"], ["--host", "0.0.0.0", "--ingress"]):
+        assert cli.main([*argv, "--allowed-host", "zigbee.home.example", "--demo", "--port", "8793"]) == 2
+        err = capsys.readouterr().err
+        assert "--allowed-host needs a password" in err and "ZLM_PASSWORD" in err and "--password-file" in err
+    with pytest.raises(AccessError, match="needs a password"):
+        Access(allowed_hosts=(parse_allowed_host("zigbee.home.example"),))
+    assert Access(password=PASSWORD, allowed_hosts=(parse_allowed_host("zigbee.home.example"),)).allowed_hosts
+
+
+@pytest.mark.parametrize("keep_host", [False, True], ids=["host rewritten to the target", "browser's host kept with --allowed-host"])
+def test_password_a_tls_proxy_in_front_of_a_loopback_bind_is_authenticated(keep_host, tmp_path):
+    """The set-up the README recommends for a network you do not trust: the tool on loopback, a proxy in front, a password."""
+    prefix = "/zigbee/"
+    allowed = (parse_allowed_host("zigbee.home.example"),)   # the name the browser types: its Origin, whatever Host the proxy forwards
+    host = {"Host": "zigbee.home.example"}   # what the browser sends to the proxy (the proxy rewrites it, or forwards it as it came)
+
+    async def main():
+        hub = Hub(DeviceStore(tmp_path), Registry(tmp_path), dict(INFO), 100)
+        hub.keys.set("0x1a62", NET.hex(), "Home")
+        app_server = TestServer(build_app(hub, Access(host="127.0.0.1", password=PASSWORD, allowed_hosts=allowed)), host="127.0.0.1")
+        await app_server.start_server()
+        proxy = TestServer(make_app(f"http://127.0.0.1:{app_server.port}", prefix, keep_host), host="127.0.0.1")
+        await proxy.start_server()
+        base = f"http://127.0.0.1:{proxy.port}{prefix}"
+        origin = {"Origin": "https://zigbee.home.example", **host}
+        try:
+            async with aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar(unsafe=True)) as http:
+                for page in ("", "devices"):
+                    found = await http.get(base + page, headers=host, allow_redirects=False)
+                    assert found.status == 302 and found.headers["Location"] == "login", page
+                for path in ("api/session", "api/keys", "api/lists", "api/hue", "api/vendors"):
+                    found = await http.get(base + path, headers=host, allow_redirects=False)
+                    assert found.status == 401 and NET.hex() not in await found.text(), path
+                assert (await http.post(base + "api/lists", json={"name": "x"}, headers=origin)).status == 401
+                with pytest.raises(aiohttp.WSServerHandshakeError) as refused:
+                    await http.ws_connect(f"ws://127.0.0.1:{proxy.port}{prefix}ws", headers=origin)
+                assert refused.value.status == 401
+                if keep_host:   # a name nobody allowed is refused, whatever else is right
+                    assert (await http.get(base + "login", headers={"Host": "evil.example"})).status == 403
+                assert (await http.post(base + "login", data={"password": PASSWORD}, headers={**host, "Origin": "https://evil.example"}, allow_redirects=False)).status == 403
+                assert (await http.post(base + "login", data={"password": "wrong"}, headers=origin, allow_redirects=False)).status == 401
+                signed = await http.post(base + "login", data={"password": PASSWORD}, headers=origin, allow_redirects=False)
+                assert signed.status == 303 and signed.headers["Location"] == "./"
+                for page in ("", "devices"):
+                    assert (await http.get(base + page, headers=host, allow_redirects=False)).status == 200
+                assert NET.hex() in await (await http.get(base + "api/keys", headers=host)).text()
+                token = (await (await http.get(base + "api/session", headers=host)).json())["token"]
+                assert (await http.post(base + "api/lists", json={"name": "x"}, headers=origin)).status == 403   # signed in, still no token
+                assert (await http.post(base + "api/lists", json={"name": "x"}, headers={**origin, "X-ZLM-Token": token})).status == 200
+                async with http.ws_connect(f"ws://127.0.0.1:{proxy.port}{prefix}ws?token={token}", headers=origin) as ws:
+                    assert (await ws.receive_json())["type"] == "hello"
+        finally:
+            await proxy.close()
+            await app_server.close()
+
+    asyncio.run(main())
+
+
+def test_password_the_public_name_of_a_proxy_must_be_allowed_for_its_origin_even_when_host_is_rewritten():
+    """A browser at https://zigbee.home.example sends that Origin whatever Host the proxy forwards: without --allowed-host it cannot sign in."""
+    bare = Access(host="127.0.0.1", password=PASSWORD)
+    named = Access(host="127.0.0.1", password=PASSWORD, allowed_hosts=(parse_allowed_host("zigbee.home.example"),))
+    assert bare.host_ok("127.0.0.1:8765", "127.0.0.1", 8765) and not bare.origin_ok("https://zigbee.home.example", "127.0.0.1")
+    assert named.host_ok("127.0.0.1:8765", "127.0.0.1", 8765) and named.origin_ok("https://zigbee.home.example", "127.0.0.1")
+
+
+# ------------------------------------------------------------------------------------------ the session cookie
+
+def test_cookie_name_carries_the_listening_port_and_no_other_name_is_a_session(tmp_path):
+    async def scenario(client, hub):
+        made = await sign_in(client)
+        names = list(SimpleCookie(made.headers["Set-Cookie"]))
+        assert names == [f"zlm_session_{client.server.port}"] == [acc.cookie_name(client.server.port)]
+        sid = client.session.cookie_jar.filter_cookies(client.make_url("/"))[cookie_of(client)].value
+        assert (await client.get("/api/keys")).status == 200
+        client.session.cookie_jar.clear()   # from here only the header below is sent
+        assert (await client.get("/api/keys", headers={"Cookie": f"{cookie_of(client)}={sid}"})).status == 200
+        for name in ("zlm_session", acc.cookie_name(client.server.port + 1)):   # the old name, and another instance's
+            assert (await client.get("/api/keys", headers={"Cookie": f"{name}={sid}"})).status == 401, name
+        assert acc.cookie_name(8765) != acc.cookie_name(8766)
+
+    serve(scenario, tmp_path, lan())
+
+
+def test_cookie_two_instances_on_one_host_keep_their_own_sessions(tmp_path):
+    async def main():
+        servers = []
+        for _ in range(2):
+            hub = Hub(DeviceStore(None), Registry(tmp_path), dict(INFO), 100)
+            servers.append(TestServer(build_app(hub, lan()), host="127.0.0.1"))
+            await servers[-1].start_server()
+        try:
+            async with aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar(unsafe=True)) as http:   # one browser: cookies do not know ports
+                for one in servers:
+                    done = await http.post(f"http://127.0.0.1:{one.port}/login", data={"password": PASSWORD}, allow_redirects=False)
+                    assert done.status == 303
+                for one in servers:   # the second sign-in did not take the first one's session away
+                    assert (await http.get(f"http://127.0.0.1:{one.port}/api/lists")).status == 200, one.port
+        finally:
+            for one in servers:
+                await one.close()
+
+    asyncio.run(main())
+
+
+def test_cookie_a_session_belongs_to_the_address_that_signed_in():
+    sessions = Sessions()
+    sid = sessions.start("192.0.2.7")
+    assert sessions.valid(sid, "192.0.2.7") and sessions.valid(sid, "::ffff:192.0.2.7")   # one address, however it is written
+    for other in ("192.0.2.8", "::1", "", None):
+        assert not sessions.valid(sid, other)
+    assert sessions.valid(sid, "192.0.2.7")   # presenting it from elsewhere did not end it
+    behind_a_proxy = sessions.start("127.0.0.1")
+    assert sessions.valid(behind_a_proxy, "127.0.0.1")
+
+
+def test_cookie_presented_from_another_address_is_not_a_session(tmp_path, monkeypatch):
+    async def scenario(client, hub):
+        assert (await sign_in(client)).status == 303
+        assert (await client.get("/api/keys")).status == 200
+        monkeypatch.setattr(server, "_peer", lambda request: "203.0.113.9")   # the same cookie, from another machine
+        for path in ("/api/keys", "/api/session", "/"):
+            assert (await client.get(path, allow_redirects=False)).status in (302, 401), path
+        assert await ws_status(client, "/ws") == 401
+        monkeypatch.undo()
+        assert (await client.get("/api/keys")).status == 200
+
+    serve(scenario, tmp_path, lan())
+
+
+# ------------------------------------------------------------------------------------------ sign-out really ends the session
+
+def test_token_on_the_sign_in_channel_belongs_to_one_session_and_dies_with_it(tmp_path):
+    async def scenario(client, hub):
+        assert (await sign_in(client)).status == 303
+        first = await token_of(client)
+        assert (await client.post("/api/lists", json={"name": "a"}, headers=guarded(client, first))).status == 200
+        assert (await client.post("/logout", headers=guarded(client, first))).status == 200
+        assert (await sign_in(client)).status == 303   # a new session
+        second = await token_of(client)
+        assert second != first and first not in second
+        assert (await client.post("/api/lists", json={"name": "b"}, headers=guarded(client, first))).status == 403   # the old token is refused
+        assert await ws_status(client, f"/ws?token={first}") == 403
+        process_wide = client.server.app[server.TOKEN]
+        assert process_wide not in (first, second)
+        assert (await client.post("/api/lists", json={"name": "c"}, headers=guarded(client, process_wide))).status == 403
+        assert (await client.post("/api/lists", json={"name": "d"}, headers=guarded(client, second))).status == 200
+        assert [item["name"] for item in hub.store.describe() if item["name"] in "abcd"] == ["a", "d"]
+
+    serve(scenario, tmp_path, lan())
+
+
+def test_logout_closes_the_open_live_connections_of_that_session_and_no_other(tmp_path):
+    async def scenario(client, hub):
+        assert (await sign_in(client)).status == 303
+        token = await token_of(client)
+        ws = await client.ws_connect(f"/ws?token={token}")
+        for _ in range(3):
+            await ws.receive_json()   # hello, status, backlog
+        base = f"http://127.0.0.1:{client.server.port}"
+        async with aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar(unsafe=True)) as other:   # a second browser, signed in separately
+            assert (await other.post(f"{base}/login", data={"password": PASSWORD}, allow_redirects=False)).status == 303
+            other_token = (await (await other.get(f"{base}/api/session")).json())["token"]
+            other_ws = await other.ws_connect(f"{base}/ws?token={other_token}")
+            for _ in range(3):
+                await other_ws.receive_json()
+            assert len(hub.clients) == 2
+            assert (await client.post("/logout", headers=guarded(client, token))).status == 200
+            ended = await asyncio.wait_for(ws.receive(), 5)
+            assert ended.type in (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED)
+            assert len(hub.clients) == 1
+            with contextlib.suppress(ConnectionError):
+                await ws.send_json({"type": "rename", "ieee": "00:12:4b:00:00:00:00:01", "name": "after sign-out"})
+            await hub.send_all({"type": "probe"})
+            assert (await asyncio.wait_for(other_ws.receive_json(), 5))["type"] == "probe"   # the other session streams on
+            await asyncio.sleep(0.2)
+            assert "00:12:4b:00:00:00:00:01" not in hub.names()
+            await other_ws.close()
+
+    serve(scenario, tmp_path, lan())
+
+
+# ------------------------------------------------------------------------------------------ --ingress only inside Home Assistant
+
+@pytest.mark.parametrize("env", [{}, {"SUPERVISOR_TOKEN": ""}, {"SUPERVISOR_TOKEN": "   "}, {"HASSIO_TOKEN": "old name", "ZLM_PASSWORD": PASSWORD}],
+                         ids=["unset", "empty", "blank", "a password changes nothing"])
+def test_ingress_refuses_to_start_without_a_supervisor_token(env, monkeypatch, capsys):
+    for name in ("SUPERVISOR_TOKEN", "ZLM_PASSWORD"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    _no_serve(monkeypatch)
+    assert cli.main(["--host", "0.0.0.0", "--ingress", "--demo", "--port", "8793"]) == 2
+    err = capsys.readouterr().err
+    assert "--ingress is for the Home Assistant app" in err and "SUPERVISOR_TOKEN" in err and "172.30.32.2" in err
+    with pytest.raises(AccessError, match="Home Assistant"):
+        acc.from_args(cli.parser().parse_args(["--host", "0.0.0.0", "--ingress"]), env)
+    assert acc.from_args(cli.parser().parse_args(["--host", "0.0.0.0", "--ingress"]), {"SUPERVISOR_TOKEN": "synthetic"}).ingress
+
+
+def test_ingress_not_asked_for_needs_no_supervisor_token(monkeypatch):
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    assert not acc.from_args(cli.parser().parse_args(["--host", "0.0.0.0"]), {"ZLM_PASSWORD": PASSWORD}).ingress
+    assert acc.from_args(cli.parser().parse_args([]), {}).local
+
+
+def test_ingress_the_docs_say_plainly_that_it_is_not_for_use_outside_home_assistant():
+    root = Path(__file__).resolve().parent.parent
+    for path in (root / "README.md", root / "homeassistant" / "zigbee_live_map" / "DOCS.md"):
+        assert "`--ingress` is not for use outside Home Assistant" in path.read_text(encoding="utf-8"), path.name
+
+
+# ------------------------------------------------------------------------------------------ robustness
+
+def test_robust_the_hue_bridge_may_be_this_computer_only_where_nobody_signs_in(monkeypatch, tmp_path):
+    """A signed-in visitor of a proxy in front of a loopback bind must not be able to make the tool dial this computer."""
+    seen = []
+    real = server.HueService
+
+    def spy(*args, **kw):
+        seen.append(kw["allow_loopback"])
+        return real(*args, **kw)
+
+    monkeypatch.setattr(server, "HueService", spy)
+
+    async def run(access):
+        args = cli.parser().parse_args(["--demo", "--port", "0", "--data-dir", str(tmp_path)])
+        task = asyncio.create_task(server.serve(args, access))
+        await asyncio.sleep(0.3)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    for access in (Access(), Access(host="127.0.0.1", password=PASSWORD), Access(host="0.0.0.0", password=PASSWORD)):
+        asyncio.run(run(access))
+    assert seen == [True, False, False]
+
+def test_robust_a_request_whose_connection_is_gone_is_refused_not_a_500(tmp_path):
+    async def handler(request):
+        raise AssertionError("the handler must not run")
+
+    async def main():
+        hub = Hub(DeviceStore(tmp_path), Registry(tmp_path), dict(INFO), 100)
+        gone = Mock()
+        gone.get_extra_info.return_value = None   # no peer, no socket name
+        for access in (None, lan(), Access(host="0.0.0.0", ingress=True)):
+            app = build_app(hub, access)
+            for transport in (None, gone):
+                protocol = Mock(max_field_size=8190, max_line_length=8190, max_headers=128, transport=transport)   # the request reads its transport from here
+                request = make_mocked_request("GET", "/api/keys", app=app, protocol=protocol, transport=transport)
+                assert request.transport is transport
+                with pytest.raises(web.HTTPForbidden):
+                    await server.access_control(request, handler)
+
+    asyncio.run(main())
+
+
+def test_robust_a_host_without_a_port_means_port_80_and_only_there():
+    a = Access(host="0.0.0.0", password="x")
+    assert a.host_ok("192.0.2.5", "192.0.2.5", 80) and a.host_ok("192.0.2.5:80", "192.0.2.5", 80) and a.host_ok("[2001:db8::5]", "2001:db8::5", 80)
+    assert not a.host_ok("192.0.2.5", "192.0.2.5", 8765) and not a.host_ok("192.0.2.5", "192.0.2.5", 8080)
+    assert not a.host_ok("192.0.2.5:8080", "192.0.2.5", 80) and not a.host_ok("192.0.2.6", "192.0.2.5", 80)
+    assert not a.host_ok("localhost", "192.0.2.5", 80) and not a.host_ok("localhost:80", "127.0.0.1", 80)   # a name is not an address of this socket (not a loopback bind)
+
+
+def test_robust_a_token_with_a_letter_outside_ascii_is_refused_not_a_500(tmp_path):
+    async def lan_scenario(client, hub):
+        assert (await sign_in(client)).status == 303
+        headers = guarded(client, "t\u00f6k\u00e9n")
+        assert (await client.post("/api/lists", json={"name": "x"}, headers=headers)).status == 403
+        assert await ws_status(client, "/ws?token=t%C3%B6k%C3%A9n") == 403
+
+    async def local_scenario(client, hub):
+        assert (await client.post("/api/lists", json={"name": "x"}, headers=guarded(client, "t\u00f6k\u00e9n"))).status == 403
+        assert await ws_status(client, "/ws?token=t%C3%B6k%C3%A9n") == 403
+
+    serve(lan_scenario, tmp_path, lan())
+    serve(local_scenario, tmp_path)

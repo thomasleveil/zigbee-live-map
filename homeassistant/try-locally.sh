@@ -10,7 +10,8 @@
 #   - a reverse proxy at exactly 172.30.32.2 (the Supervisor's address) that serves the app under a path prefix,
 #     HTTP and WebSocket, adds X-Ingress-Path, and asks for no login;
 #   - one port published on 127.0.0.1 of this computer.
-# It does NOT run a Supervisor, does not check anyone's Home Assistant session, and passes no USB device.
+# It does NOT run a Supervisor, does not check anyone's Home Assistant session, and passes no USB device. The app gets a dummy
+# SUPERVISOR_TOKEN (see below), without which --ingress refuses to start.
 #
 # Settings (environment): ZLM_TRY_PORT  host port on 127.0.0.1 (default 8798)
 #                         ZLM_TRY_DEMO  true (default): simulated network. false: the real mode with no dongle
@@ -85,7 +86,10 @@ docker network create --subnet "$SUBNET" --gateway "$GATEWAY" "$NET" >/dev/null
 echo "== app ($APP at $APP_IP, demo=$DEMO)"
 mkdir -p "$WORK/data"
 printf '{"channel": 11, "demo": %s, "allowed_hosts": []}\n' "$DEMO" > "$WORK/data/options.json"
-docker run -d --name "$APP" --network "$NET" --ip "$APP_IP" -v "$WORK/data:/data" "$IMAGE" >/dev/null
+# SUPERVISOR_TOKEN is a dummy, on purpose: the app starts with --ingress only where Home Assistant started it, and it knows
+# that by this variable, which the Supervisor sets in every app container. Here nothing checks its value, so any text will do.
+docker run -d --name "$APP" --network "$NET" --ip "$APP_IP" -e SUPERVISOR_TOKEN=dummy-not-a-supervisor-token \
+    -v "$WORK/data:/data" "$IMAGE" >/dev/null
 
 echo "== proxy ($PROXY at $SUPERVISOR_IP, $PREFIX/ -> $APP:$INGRESS_PORT)"
 cat > "$WORK/proxy.conf" <<EOF

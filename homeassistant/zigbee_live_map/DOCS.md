@@ -9,7 +9,7 @@ Shows your Zigbee network talking, live, from a passive USB sniffer dongle: a ma
 
 ## Open it
 
-Start the app, then use **Open Web UI** on this page, or turn on **Show in sidebar**. Home Assistant signs you in, so the app asks for no password. By default only Home Assistant administrators see the sidebar entry (`panel_admin`), because the page shows live radio traffic and the network keys you may enter.
+Start the app, then use **Open Web UI** on this page, or turn on **Show in sidebar**. Home Assistant signs you in, so the app asks for no password. (The app starts the tool with `--ingress`. `--ingress` is not for use outside Home Assistant: the tool refuses to start with it unless Home Assistant started it, and anywhere else a password is the way in.) By default only Home Assistant administrators see the sidebar entry (`panel_admin`), because the page shows live radio traffic and the network keys you may enter.
 
 ## Options
 
@@ -18,7 +18,7 @@ Start the app, then use **Open Web UI** on this page, or turn on **Show in sideb
 | Zigbee channel | The channel your network uses, 11 to 26 (your hub's settings show it). It can also be changed from the page. Ignored when the demo is on. |
 | Demo network | Simulated network instead of the dongle. |
 | Password | Only needed if you also publish the port (below). Not used through Home Assistant. |
-| Allowed host names | Only for a published port: the names or addresses your browser types to reach it, for example `homeassistant.local` or `192.168.1.5:8099`. Add `:port` when the port you publish is not 8099. Without them the page refuses the request. |
+| Allowed host names | Only for a published port, and only together with a password (the app does not start with host names and no password): the names or addresses your browser types to reach it, for example `homeassistant.local` or `192.168.1.5:8099`. Add `:port` when the port you publish is not 8099. Without them the page refuses the request. |
 
 ## Where your data is kept
 
@@ -26,7 +26,7 @@ In the app's private `/data` directory, which survives restarts and updates and 
 
 ## Reaching the page without Home Assistant (optional)
 
-The port is **not published** by default. To open the page from a browser outside Home Assistant, enable port `8099/tcp` in the **Network** section of this page, set a **Password** and the **Allowed host names**. This traffic is plain HTTP: the password, the session cookie and the network keys cross your network unencrypted. Only do this on a network you trust.
+The port is **not published** by default. To open the page from a browser outside Home Assistant, enable port `8099/tcp` in the **Network** section of this page, set a **Password** and the **Allowed host names**. This traffic is plain HTTP: the password, the session cookie and the network keys cross your network unencrypted. Only do this on a network you trust. Someone already on that network can keep you from signing in by failing sign-ins on purpose (the wait after wrong passwords is shared); they cannot get in that way, and people already signed in are not affected.
 
 ## Not verified
 
