@@ -26,7 +26,12 @@ LIBUSB_CANDIDATES = ("/opt/homebrew/lib/libusb-1.0.dylib", "/usr/local/lib/libus
 
 
 class SnifferError(RuntimeError):
-    pass
+    """Why the dongle cannot be read. `code` names what is missing, so the page can explain it in the reader's language:
+    "libusb" (the library), "not_found" (no dongle with the sniffer firmware), "radio" (it did not start), "usb" (anything else)."""
+
+    def __init__(self, message: str, code: str = "usb") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def _backend():
@@ -37,7 +42,7 @@ def _backend():
         backend = usb.backend.libusb1.get_backend(find_library=lambda _name, path=path: path)
         if backend is not None:
             return backend
-    raise SnifferError("libusb not found (macOS: brew install libusb, Debian/Ubuntu: apt install libusb-1.0-0)")
+    raise SnifferError("libusb not found (macOS: brew install libusb, Debian/Ubuntu: apt install libusb-1.0-0)", "libusb")
 
 
 def open_sniffer(channel: int):
@@ -45,7 +50,7 @@ def open_sniffer(channel: int):
         raise SnifferError(f"channel {channel} is outside 11-26")
     dev = usb.core.find(idVendor=VID, idProduct=PID, backend=_backend())
     if dev is None:
-        raise SnifferError("CC2531 with the TI sniffer firmware (USB 0451:16ae) not found")
+        raise SnifferError("CC2531 with the TI sniffer firmware (USB 0451:16ae) not found", "not_found")
     try:
         dev.set_configuration()
         dev.ctrl_transfer(0xC0, REQ_GET_IDENT, 0, 0, 256)
@@ -55,7 +60,7 @@ def open_sniffer(channel: int):
                 break
             time.sleep(0.01)
         else:
-            raise SnifferError("the dongle radio did not power up")
+            raise SnifferError("the dongle radio did not power up", "radio")
         dev.ctrl_transfer(0x40, 0xC9, 0, 0)
         dev.ctrl_transfer(0x40, REQ_SET_CHAN, 0, 0, bytes([channel]))
         dev.ctrl_transfer(0x40, REQ_SET_CHAN, 0, 1, bytes([0]))

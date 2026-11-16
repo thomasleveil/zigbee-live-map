@@ -46,6 +46,8 @@ On Linux, give your user access to the dongle with a udev rule, for example in `
 SUBSYSTEM=="usb", ATTR{idVendor}=="0451", ATTR{idProduct}=="16ae", MODE="0660", GROUP="plugdev"
 ```
 
+When the dongle cannot be read, the map page says why (no dongle found, libusb missing, the radio did not start, or the device cannot be opened) and lists these requirements. It keeps looking every two seconds, so plugging the dongle in is enough: nothing has to be restarted.
+
 ### Install
 
 ```sh

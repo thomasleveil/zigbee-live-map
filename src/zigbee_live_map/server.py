@@ -90,7 +90,7 @@ class Hub:
         self.keys = keys if keys is not None else KeyStore(None)
         self.hue = hue if hue is not None else HueService(None)   # memory only, and silent until the user sets a bridge up
         self.hue.on_change = self.hue_changed
-        self.status = {"type": "status", "sniffer": "starting", "detail": ""}
+        self.status = {"type": "status", "sniffer": "starting", "detail": "", "reason": ""}
         self.events: deque = deque(maxlen=backlog)
         self.clients: set[web.WebSocketResponse] = set()
         self.classifier = Classifier()
@@ -215,8 +215,9 @@ class Hub:
                     self.identities[ns] = info["identity"]
                     await self.send_all({"type": "identity", "addr": ns, "id": info["identity"]})
 
-    async def set_status(self, sniffer: str, detail: str = "") -> None:
-        self.status = {"type": "status", "sniffer": sniffer, "detail": detail}
+    async def set_status(self, sniffer: str, detail: str = "", reason: str = "") -> None:
+        """`reason` is the sniffer's own code for what is missing (see SnifferError), empty when nothing is."""
+        self.status = {"type": "status", "sniffer": sniffer, "detail": detail, "reason": reason}
         await self.send_all(self.status)
 
     async def names_changed(self) -> None:
@@ -309,7 +310,7 @@ class LiveSource:
                                 pcap.flush()   # so the capture is readable while the tool is still running
                             self._post("frame", generation, now, frame, rssi)
                 except (sniffer.SnifferError, usb.core.USBError) as exc:
-                    self._post("status", generation, "absent", str(exc))
+                    self._post("status", generation, "absent", str(exc), getattr(exc, "code", "usb"))
                     self._retune.wait(2)
                 finally:
                     if dev is not None:

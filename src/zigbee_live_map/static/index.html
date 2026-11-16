@@ -29,6 +29,12 @@
 #graph { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
 #rhythm { display: block; width: 100%; background: var(--panel); border-top: 1px solid var(--line); }
 .hint { position: absolute; right: .75rem; top: .6rem; margin: 0; color: var(--muted); font-size: .9rem; max-width: 20rem; text-align: right; pointer-events: none; }
+/* What the tool needs, shown on the map while the dongle cannot be read. */
+.needs { position: absolute; left: .75rem; top: .6rem; z-index: 2; box-sizing: border-box; width: min(31rem, calc(100% - 1.5rem)); max-height: calc(100% - 1.2rem); overflow: auto;
+  padding: .7rem .9rem; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); box-shadow: 0 6px 24px rgba(0, 0, 0, .18); }
+.needs h2 { margin: 0 0 .35rem; font-size: 1.05rem; } .needs p { margin: .35rem 0; } .needs ol { margin: .45rem 0; padding-left: 1.3rem; } .needs li { margin: .4rem 0; }
+.needs summary { cursor: pointer; font-weight: 600; } .needs code { font-family: ui-monospace, Menlo, monospace; font-size: .9em; padding: .05rem .3rem; border-radius: 4px; background: var(--bg2); white-space: nowrap; }
+.graphwrap:has(.needs:not([hidden])) .hint { display: none; }
 
 .side { display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
 .side > header { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .6rem .8rem; border-bottom: 1px solid var(--line); }
@@ -148,6 +154,20 @@
     <div class="graphwrap">
       <canvas id="graph" role="img" data-i18n-aria="map.graphAria"></canvas>
       <p class="hint" data-i18n="map.hint"></p>
+      <section class="needs" id="needs" hidden aria-labelledby="needsTitle">
+        <h2 id="needsTitle" data-i18n="needs.title"></h2>
+        <p id="needsCause" role="status"></p>
+        <details id="needsMore">
+          <summary data-i18n="needs.what"></summary>
+          <ol>
+            <li data-i18n="needs.dongle"></li>
+            <li><span data-i18n="needs.libusb"></span> macOS <code>brew install libusb</code>, Debian / Ubuntu <code>sudo apt install libusb-1.0-0</code></li>
+            <li data-i18n="needs.udev"></li>
+          </ol>
+          <p data-i18n="needs.retry"></p>
+          <p><span data-i18n="needs.demo"></span> <code>zigbee-live-map --demo</code></p>
+        </details>
+      </section>
     </div>
     <canvas id="rhythm" role="img" data-i18n-aria="map.rhythmAria"></canvas>
   </div>
@@ -630,6 +650,20 @@ function renderDevices() {
   }
 }
 const ms1 = s => Math.round(s * 1000);
+// While the dongle cannot be read (live mode only), the map says why and what the tool needs. The first time it is spelled out;
+// when a dongle that was working goes away (devices are already on the map) one line is enough, the rest stays a click away.
+// Texts are written only when they change: the notice is there to be read and copied, not redrawn under the reader.
+let needsOn = false, needsCause = "";
+function renderNeeds() {
+  const on = connOpen && S.mode === "live" && sniffer.sniffer === "absent";
+  if (on && !needsOn) $("needsMore").open = S.nodes.size === 0;
+  if (on !== needsOn) { needsOn = on; $("needs").hidden = !on; }
+  if (!on) return;
+  const key = "needs.cause." + (sniffer.reason || "usb");
+  const cause = t(ZLM.has(key) ? key : "needs.cause.usb", { detail: sniffer.detail || "" });
+  if (cause !== needsCause) $("needsCause").textContent = needsCause = cause;
+}
+
 // The sheet is redrawn several times a second while frames arrive. Redrawing replaces its text nodes, which drops a text
 // selection before it can be copied: so while text is being selected in the sheet (button held, or a selection that sits in
 // it) the redraw waits, a line says so, and the sheet catches up once the selection is gone.
@@ -915,7 +949,7 @@ async function connect() {
   const frame = ts => { physics(Math.min(.05, (ts - last) / 1000)); last = ts; draw(ts); requestAnimationFrame(frame); };
   requestAnimationFrame(frame);
   setInterval(() => {
-    renderHud(); drawRhythm();
+    renderHud(); renderNeeds(); drawRhythm();
     if (dirty.legend) { renderLegend(); dirty.legend = false; }
     if (dirty.devices) { renderDevices(); dirty.devices = false; }
     const selecting = selectingInCard(); $("cardPaused").hidden = !selecting;
