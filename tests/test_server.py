@@ -212,7 +212,7 @@ def test_fill_adds_every_identified_heard_device_with_its_model(tmp_path):
             await ws.receive_json()   # hello, status, backlog
         done = await client.post(f"/api/lists/{list_id}/fill-identities", headers=origin)
         assert done.status == 200 and (await done.json()) == {"added": 1}
-        ieee = "00:15:8d:00:01:a2:b3:c4"
+        ieee = ":".join(f"{DEV64:016x}"[i:i + 2] for i in range(0, 16, 2))   # the address the frames above were built with
         assert hub.store.lists[list_id]["devices"] == {ieee: {"name": "lumi.weather", "model": "lumi.weather", "nwk": "0x72f6"}}
         update = await ws.receive_json()
         assert update["type"] == "names" and update["names"][ieee]["name"] == "lumi.weather"

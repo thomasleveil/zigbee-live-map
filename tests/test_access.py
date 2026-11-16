@@ -29,7 +29,7 @@ from zigbee_live_map.server import Hub, build_app
 from zigbee_live_map.vendors import Registry
 
 PASSWORD = "synthetic passphrase 7 of 9"
-NET = bytes.fromhex("0f1e2d3c4b5a69788796a5b4c3d2e1f0")
+NET = bytes.fromhex("0f1e2d3c4b5a69788796a5b4c3d2e1f0")   # an invented key: nothing here needs a real one
 SECRET_LIST = "Synthetic secret list"
 INFO = {"channel": None, "mode": "replay", "focus": None, "can_tune": False}
 PAGES = ("/", "/devices")
