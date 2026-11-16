@@ -44,7 +44,7 @@ from urllib.parse import urlsplit
 
 from aiohttp import WSMsgType, web
 
-from . import __version__, access as accessmod, crypto, decode, demo, hue as huemod, keys as keystore
+from . import __version__, access as accessmod, crypto, decode, demo, keys as keystore
 from .access import COOKIE, INGRESS, LAN, LOCAL, Access, LoginGuard, Sessions
 from .devices import DeviceError, DeviceStore
 from .frames import Classifier, read_pcap
@@ -88,6 +88,8 @@ class Hub:
         self.events: deque = deque(maxlen=backlog)
         self.clients: set[web.WebSocketResponse] = set()
         self.classifier = Classifier()
+        self._names_sent: str | None = None   # what the pages were last sent as `names` and as `hue` (as JSON, to compare): a read that
+        self._hue_sent: str | None = None     # found nothing new wakes nobody
         self.heard: dict[str, str] = {}  # IEEE -> short address, as heard on the air
         self.generation = 0  # bumped on every channel change, so frames from the old channel are dropped
         self.source: LiveSource | None = None
@@ -105,9 +107,16 @@ class Hub:
     def names(self) -> dict[str, dict]:
         """What the pages call a device: the user's lists first, the bridge's own name for any device no list names.
 
-        Computed on the way out and written nowhere: the lists stay exactly what the user made them.
+        Field by field: a list entry that has no name (only a model or a short address, which import allows) keeps its other fields
+        and takes the bridge's name. Computed on the way out and written nowhere: the lists stay exactly what the user made them.
         """
-        return {**self.hue.fallback_names(), **self.store.merged()}
+        names = self.hue.fallback_names()
+        for ieee, entry in self.store.merged().items():
+            merged = dict(entry)
+            if not merged.get("name") and ieee in names:
+                merged["name"] = names[ieee]["name"]
+            names[ieee] = merged
+        return names
 
     def vendors(self) -> dict[str, str]:
         known = set(self.store.merged()) | set(self.heard)
@@ -205,12 +214,23 @@ class Hub:
         await self.send_all(self.status)
 
     async def names_changed(self) -> None:
-        await self.send_all({"type": "names", "names": self.names(), "vendors": self.vendors()})
+        names = self.names()
+        self._names_sent = json.dumps(names, sort_keys=True)
+        await self.send_all({"type": "names", "names": names, "vendors": self.vendors()})
 
     async def hue_changed(self) -> None:
-        """The bridge was read, set up or forgotten: the pages get the new names, then what the hub says about each device."""
-        await self.names_changed()
-        await self.send_all({"type": "hue", **self.hue.view()})
+        """The bridge was read, set up or forgotten: the pages get the new names, then what the hub says about each device.
+
+        Only what differs from the last time: the periodic read tells nobody that nothing happened. The time of the last read does
+        not count (pages learn it with their next status request or change).
+        """
+        if json.dumps(self.names(), sort_keys=True) != self._names_sent:
+            await self.names_changed()
+        view = self.hue.view()
+        stamp = json.dumps({key: value for key, value in view.items() if key != "lastRead"}, sort_keys=True)
+        if stamp != self._hue_sent:
+            self._hue_sent = stamp
+            await self.send_all({"type": "hue", **view})
 
     async def tune(self, channel: int) -> None:
         if self.source is None or channel not in range(11, 27) or channel == self.info["channel"]:
@@ -653,7 +673,7 @@ async def api_hue(request: web.Request) -> web.Response:
 
 
 async def api_hue_discover(request: web.Request) -> web.Response:
-    return web.json_response({"bridges": await huemod.discover()})
+    return web.json_response({"bridges": await request.app[HUB].hue.search()})
 
 
 async def api_hue_pair(request: web.Request) -> web.Response:
@@ -753,7 +773,7 @@ async def serve(args, access: Access | None = None) -> None:
     store = demo_store() if mode == "demo" else DeviceStore(data_dir)
     info = {"channel": args.channel if mode == "live" else None, "mode": mode, "focus": args.focus, "can_tune": mode == "live"}
     hub = Hub(store, Registry(data_dir), info, args.backlog, keys=KeyStore(None if mode == "demo" else data_dir),
-              hue=HueService(None if mode == "demo" else data_dir))
+              hue=HueService(None if mode == "demo" else data_dir, allow_loopback=access.loopback))
     hub.hue.start()   # only reads a bridge the user set up in an earlier session; nothing at all otherwise
     queue: asyncio.Queue = asyncio.Queue()
     tasks = [asyncio.create_task(pump(queue, hub))]

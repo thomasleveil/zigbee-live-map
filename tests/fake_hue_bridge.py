@@ -129,6 +129,13 @@ class FakeBridge:
             if row["mac_address"] == ieee:
                 row["status"] = status
 
+    def set_name(self, ieee: str, name: str) -> None:
+        """Rename a device on the bridge side, found through its radio address."""
+        owners = {row["owner"]["rid"] for row in self.resources["zigbee_connectivity"]["data"] if row["mac_address"] == ieee}
+        for device in self.resources["device"]["data"]:
+            if device["id"] in owners:
+                device["metadata"]["name"] = name
+
     # ---- the server
     def _ssl(self) -> ssl.SSLContext:
         pem, key = make_certificate(self.cn)

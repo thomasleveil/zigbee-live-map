@@ -207,6 +207,9 @@ const key = a => (a && a.includes(":")) ? (S.ieee2addr.get(a) || a) : a;
 const nameOf = n => (n && n.ieee && S.names[n.ieee] && S.names[n.ieee].name) || null;
 // What the hub (a Hue Bridge the user set up) says about a device: its own facts, and whether it can reach it.
 const hubOf = n => (S.hue.configured && n && n.ieee && S.hue.devices[n.ieee]) || null;
+// The name the user's own lists give a device: what the rename box holds. A name that is only the bridge's is a hint (the box's placeholder), never a value:
+// saving an untouched box must not copy the bridge's name into the user's list.
+const ownName = n => { const name = nameOf(n), hh = hubOf(n); return name && !(hh && hh.name === name) ? name : ""; };
 const hubBad = h => !!h && h.status !== "connected";
 const hubState = h => t(ZLM.has("hue.s." + h.status) ? "hue.s." + h.status : "hue.s.unknown");
 const label = a => { const n = S.nodes.get(a); return nameOf(n) || a || "?"; };
@@ -675,6 +678,7 @@ function renderCard() {
       : `<p class="note">${esc(t(S.security && S.security.keyKnown ? "detail.keyedWaiting" : "detail.keyless"))}</p>`) +
     `</div>`;
   $("renameForm").hidden = !n.ieee; $("btnWatch").hidden = !n.ieee;
+  $("renameInput").placeholder = hh && hh.name ? hh.name : "";
   $("btnWatch").textContent = t(isFocus(n) ? "card.unwatch" : "card.watch"); $("btnWatch").setAttribute("aria-pressed", String(isFocus(n)));
   card.hidden = false;
 }
@@ -724,7 +728,7 @@ function renderIssues() {
 }
 function select(addr) {
   sel = sel === addr ? null : addr;
-  if (sel && S.nodes.has(sel)) $("renameInput").value = nameOf(S.nodes.get(sel)) || "";
+  if (sel && S.nodes.has(sel)) $("renameInput").value = ownName(S.nodes.get(sel));
   renderDevices(); renderCard(); renderLog();
 }
 function renderHud() {
@@ -845,7 +849,7 @@ $("cardClose").addEventListener("click", () => select(null));
 $("btnWatch").addEventListener("click", () => { const n = S.nodes.get(sel); if (n && n.ieee) { setFocus(isFocus(n) ? null : n.ieee, true); renderCard(); renderHud(); } });
 $("renameForm").addEventListener("submit", ev => {
   ev.preventDefault(); const n = S.nodes.get(sel);
-  if (n && n.ieee && ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "rename", ieee: n.ieee, name: $("renameInput").value }));
+  if (n && n.ieee && $("renameInput").value !== ownName(n) && ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "rename", ieee: n.ieee, name: $("renameInput").value }));   // untouched: nothing to save
 });
 
 // ------------------------------------------------------------------ websocket

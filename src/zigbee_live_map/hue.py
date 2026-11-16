@@ -13,7 +13,9 @@ authority:
 - every later request must present that same certificate (aiohttp's `Fingerprint`), checked while connecting,
   before anything, the application key included, is sent. A different one is refused, and the user forgets the
   bridge and sets it up again;
-- only private, link-local and loopback addresses are ever contacted, and the address checked is the one dialled;
+- only the local network is ever contacted: an explicit list of ranges (below), not Python's wider idea of "private", and
+  the address checked is the one dialled. Loopback only counts when the tool itself is bound to loopback, so that a signed-in
+  user on the network cannot use the bridge form to probe this computer's own ports;
 - nothing is contacted until the user asks (discover, pair, enter a key, refresh), apart from a bridge set up
   before, which is read at start-up and every 30 seconds.
 
@@ -47,7 +49,10 @@ SERVICE = "_hue._tcp.local."
 REFRESH_SECONDS = 30.0      # how often a set-up bridge is read again
 PAIR_INTERVAL = 2.0         # between two pairing attempts while the link button is not pressed
 PAIR_TIMEOUT = 30.0         # how long pairing waits for the button
-DISCOVER_SECONDS = 3.0
+DISCOVER_SECONDS = 3.0      # how long the network is listened to
+DISCOVER_DEADLINE = 6.0     # the whole search, listening and follow-ups included, whatever the network announces
+MAX_ANNOUNCED = 16          # names followed up: a home has a handful of bridges, a hostile network can announce thousands
+RESOLVE_TIMEOUT = 5.0       # looking a name up
 REQUEST_TIMEOUT = 10.0
 MAX_BODY = 4 * 1024 * 1024
 DEFAULT_PORT = 443
@@ -56,6 +61,11 @@ RESOURCES = ("device", "zigbee_connectivity", "room", "device_power")
 BRIDGE_ID_RE = re.compile(r"^[0-9a-fA-F]{16}$")
 KEY_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 HOST_RE = re.compile(r"^[A-Za-z0-9._:\[\]%-]{1,255}$")
+LOCAL_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16",     # IPv4: private use, link-local
+    "fc00::/7", "fe80::/10"))                                               # IPv6: unique local, link-local
+# Python's `is_private` also says yes to 198.18.0.0/15 (fake-IP proxies forward it to the internet), Teredo (2001::/32), NAT64
+# (64:ff9b:1::/48), the documentation ranges and more: it must not decide.
 FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
 MAX_TEXT = 80
 
@@ -68,16 +78,25 @@ class HueError(DeviceError):
 
 # ------------------------------------------------------------------------------------------ addresses
 
-def check_address(address: str) -> str:
-    """Only the local network: private, link-local or loopback. The bridge endpoint must not reach arbitrary hosts."""
+SCOPED = "Type the bridge's IPv4 address: an IPv6 address with a % and a network name, such as fe80::1%en0, cannot be used here."
+
+
+def check_address(address: str, loopback: bool = True) -> str:
+    """Only the local network (LOCAL_NETWORKS), plus this computer when `loopback`. An IPv4-mapped address is judged as the IPv4 it carries."""
+    if "%" in address:
+        raise HueError(SCOPED)      # an interface scope: the HTTP client cannot dial it
     try:
         ip = ipaddress.ip_address(address)
     except ValueError:
         raise HueError("That is not an address this tool can reach.") from None
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
-    if ip.is_unspecified or ip.is_multicast or not (ip.is_private or ip.is_link_local or ip.is_loopback):
-        raise HueError("This tool only contacts a bridge on your own network: that address is not a private, link-local or loopback one.")
+    if ip.is_loopback:
+        if loopback:
+            return address
+        raise HueError("That address is this computer itself, which this tool does not contact while it can be reached from your network.")
+    if not any(ip in network for network in LOCAL_NETWORKS):
+        raise HueError("This tool only contacts a bridge on your own network: that address is not a private or link-local one.")
     return address
 
 
@@ -96,6 +115,10 @@ def split_host(text: object) -> tuple[str, int]:
         host, _, port = text.partition(":")
     else:
         host = text     # a bare IPv6 address has no port
+    if "%" in host:
+        raise HueError(SCOPED if ":" in host else "Type the address of the bridge, such as 10.0.0.5 or bridge.local.")
+    if port is not None and not re.fullmatch(r"[0-9]{1,5}", port):
+        raise HueError("Type the address of the bridge, such as 10.0.0.5 or bridge.local.")    # "bridge:abc": the port is not a number
     number = int(port) if port else DEFAULT_PORT
     if not host or not 1 <= number <= 65535:
         raise HueError("Type the address of the bridge, such as 10.0.0.5 or bridge.local.")
@@ -103,11 +126,11 @@ def split_host(text: object) -> tuple[str, int]:
 
 
 async def resolve(host: str, port: int) -> list[str]:
-    infos = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    infos = await asyncio.wait_for(asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM), RESOLVE_TIMEOUT)
     return list(dict.fromkeys(info[4][0] for info in infos))
 
 
-async def target_address(host: str, port: int) -> str:
+async def target_address(host: str, port: int, loopback: bool = True) -> str:
     """The one address to dial, always a local one.
 
     A bridge's name often resolves to a public IPv6 address next to its private ones (a home router hands those
@@ -120,26 +143,26 @@ async def target_address(host: str, port: int) -> str:
     except ValueError:
         literal = False
     if literal:
-        return check_address(host)
+        return check_address(host, loopback)
     try:
         addresses = await resolve(host, port)
-    except OSError:
+    except (OSError, UnicodeError, asyncio.TimeoutError):    # a name such as "a..b" makes the resolver raise UnicodeError, which is not an OSError
         raise HueError("That name does not resolve. Try the bridge's IP address.") from None
     if not addresses:
         raise HueError("That name does not resolve. Try the bridge's IP address.")
     local = []
     for address in addresses:
         try:
-            local.append(check_address(address))
+            local.append(check_address(address, loopback))
         except HueError:
             continue
     if not local:
-        check_address(addresses[0])     # raises with the plain "not on your own network" sentence
+        check_address(addresses[0], loopback)     # raises with the plain "not on your own network" sentence
     return next((a for a in local if ":" not in a), local[0])
 
 
 def _base(ip: str, port: int) -> str:
-    return f"https://[{ip.replace('%', '%25')}]:{port}" if ":" in ip else f"https://{ip}:{port}"
+    return f"https://[{ip}]:{port}" if ":" in ip else f"https://{ip}:{port}"
 
 
 # ------------------------------------------------------------------------------------------ TLS
@@ -234,10 +257,10 @@ class Probe:
     name: str
 
 
-async def probe(host_text: object) -> Probe:
+async def probe(host_text: object, loopback: bool = True) -> Probe:
     """First contact: pin the certificate, read who the bridge says it is, and make sure the certificate agrees."""
     host, port = split_host(host_text)
-    ip = await target_address(host, port)
+    ip = await target_address(host, port, loopback)
     try:
         fingerprint, common_name = describe_certificate(await fetch_certificate(ip, port))
         async with Link(ip, port, fingerprint) as link:
@@ -310,7 +333,7 @@ def bridge_channel(resources: dict) -> int | None:
 
 # ------------------------------------------------------------------------------------------ discovery
 
-def parse_service(record: dict) -> dict | None:
+def parse_service(record: dict, loopback: bool = True) -> dict | None:
     """One mDNS answer into {name, bridgeId, host}, or None when it offers no address on the local network."""
     props = {(k.decode("utf-8", "replace") if isinstance(k, bytes) else str(k)).lower(): v for k, v in (record.get("properties") or {}).items()}
     raw = props.get("bridgeid")
@@ -319,7 +342,7 @@ def parse_service(record: dict) -> dict | None:
     port = record.get("port") if isinstance(record.get("port"), int) else DEFAULT_PORT
     for address in sorted(record.get("addresses") or [], key=lambda a: ":" in a):   # IPv4 first
         try:
-            check_address(address)
+            check_address(address, loopback)
         except HueError:
             continue
         host = address if port == DEFAULT_PORT else (f"[{address}]:{port}" if ":" in address else f"{address}:{port}")
@@ -328,40 +351,60 @@ def parse_service(record: dict) -> dict | None:
     return None
 
 
+async def follow_up(names: set[str], request: Callable[[str, int], Awaitable[dict | None]], budget: float) -> list[dict]:
+    """Ask for the details of at most MAX_ANNOUNCED of the announced names, together, and give up on the rest of the answers after `budget` seconds.
+
+    What a network announces is not ours to bound, so the number of questions and the time they may take both are.
+    """
+    tasks = [asyncio.ensure_future(request(name, 2000)) for name in sorted(names)[:MAX_ANNOUNCED]]
+    try:
+        done, _pending = await asyncio.wait(tasks, timeout=max(budget, 0.0)) if tasks else (set(), set())
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    return [task.result() for task in tasks if task in done and not task.cancelled() and task.exception() is None and task.result()]
+
+
 async def browse_mdns(timeout: float) -> list[dict]:
-    """Browse `_hue._tcp.local.` for `timeout` seconds. Thin on purpose: parsing and filtering are in parse_service."""
+    """Browse `_hue._tcp.local.` for `timeout` seconds, then follow up. Thin on purpose: parsing and filtering are in parse_service."""
     from zeroconf import ServiceStateChange
     from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo, AsyncZeroconf
 
+    started = asyncio.get_running_loop().time()
     azc, names = AsyncZeroconf(), set()
 
     def on_change(zeroconf, service_type, name, state_change) -> None:
-        if state_change is not ServiceStateChange.Removed:
+        if state_change is not ServiceStateChange.Removed and len(names) < 1024:    # a bound on memory too, not only on questions
             names.add(name)
+
+    async def ask(name: str, timeout_ms: int) -> dict | None:
+        info = AsyncServiceInfo(SERVICE, name)
+        if await info.async_request(azc.zeroconf, timeout_ms):
+            return {"name": name, "addresses": info.parsed_addresses(), "port": info.port, "properties": dict(info.properties)}
+        return None
 
     browser = AsyncServiceBrowser(azc.zeroconf, SERVICE, handlers=[on_change])
     try:
         await asyncio.sleep(timeout)
-        records = []
-        for name in sorted(names):
-            info = AsyncServiceInfo(SERVICE, name)
-            if await info.async_request(azc.zeroconf, 2000):
-                records.append({"name": name, "addresses": info.parsed_addresses(), "port": info.port, "properties": dict(info.properties)})
-        return records
+        left = DISCOVER_DEADLINE - 1.0 - (asyncio.get_running_loop().time() - started)    # a second kept back to close down before the hard deadline
+        return await follow_up(names, ask, left)
     finally:
         await browser.async_cancel()
         await azc.async_close()
 
 
-async def discover() -> list[dict]:
-    """The bridges answering on the network, only when the user asked."""
+async def discover(loopback: bool = True) -> list[dict]:
+    """The bridges answering on the network, only when the user asked. One overall deadline, whatever the network does."""
     try:
-        records = await browse_mdns(DISCOVER_SECONDS)
+        records = await asyncio.wait_for(browse_mdns(DISCOVER_SECONDS), DISCOVER_DEADLINE)
+    except (asyncio.TimeoutError, TimeoutError):
+        raise HueError("The search of the network took too long and was stopped. Type the bridge's address instead.") from None
     except Exception:
         raise HueError("The search of the network could not run here.") from None
     found = {}
     for record in records:
-        service = parse_service(record)
+        service = parse_service(record, loopback)
         if service:
             found[service["host"]] = service
     return sorted(found.values(), key=lambda bridge: (bridge["name"], bridge["host"]))
@@ -387,10 +430,16 @@ def _valid_config(data: Any) -> dict | None:
 class HueService:
     """One bridge at most: its stored setup, what it said last, and the two background jobs (pairing, periodic read)."""
 
-    def __init__(self, data_dir: Path | None, on_change: Notify | None = None) -> None:
-        """data_dir None keeps everything in memory (demo mode). Loading the file contacts nothing."""
+    def __init__(self, data_dir: Path | None, on_change: Notify | None = None, allow_loopback: bool = True) -> None:
+        """data_dir None keeps everything in memory (demo mode). Loading the file contacts nothing.
+
+        `allow_loopback` is whether this computer itself may be the bridge: true only while the tool is bound to loopback
+        (`Access.loopback`). Otherwise a user signed in from the network could use the bridge form to probe the server's own ports.
+        The default keeps what the tests rely on: they run a fake bridge on loopback.
+        """
         self.path = (data_dir / "hue.json") if data_dir else None
         self.on_change = on_change
+        self.allow_loopback = allow_loopback
         self.config: dict | None = None
         if self.path and self.path.is_file():
             try:
@@ -405,6 +454,9 @@ class HueService:
         self._lock = asyncio.Lock()
         self._loop_task: asyncio.Task | None = None
         self._pair_task: asyncio.Task | None = None
+        self._search: asyncio.Task | None = None
+        # The set-up in progress, if any: forgetting the bridge drops it, and every step of a set-up checks it is still the one.
+        self._setup: object | None = None
 
     @property
     def configured(self) -> bool:
@@ -432,36 +484,64 @@ class HueService:
             await self.on_change()
 
     # ---- setting up
+    def _begin(self) -> object:
+        """One set-up at a time. The token is what a step checks, after each wait, to know it was not cancelled meanwhile."""
+        self._require_free()
+        self.error = None
+        token = self._setup = object()
+        return token
+
+    def _alive(self, token: object) -> None:
+        if self._setup is not token:
+            raise HueError("That set-up was cancelled.")
+
+    def _release(self, token: object) -> None:
+        """A set-up that failed or ended leaves the service free. A cancelled one has nothing to release: the service is not its any more."""
+        if self._setup is token:
+            self._setup, self.pairing = None, None
+
     async def start_pairing(self, host: object) -> dict:
         """Check the bridge, then ask it for a key every PAIR_INTERVAL until the link button is pressed or PAIR_TIMEOUT passes."""
-        self._require_free()
-        self.error, self.pairing = None, "waiting"
+        token = self._begin()
+        self.pairing = "waiting"
         try:
-            found = await probe(host)
-        except HueError:
-            self.pairing = None
+            found = await probe(host, self.allow_loopback)
+            self._alive(token)      # forgotten during the first contact: no pairing task may come out of it
+            self._pair_task = asyncio.create_task(self._pair(found, str(host).strip(), token))
+        except asyncio.CancelledError:
+            self._release(token)
             raise
-        self._pair_task = asyncio.create_task(self._pair(found, str(host).strip()))
+        except Exception as exc:    # whatever it is, the service must be free again and the user gets a sentence
+            self._release(token)
+            raise plain(exc) from None
         await self._changed()
         return self.status()
 
     async def set_key(self, host: object, key: object) -> dict:
         """An application key the user already has: checked against the bridge before it is kept."""
-        self._require_free()
-        key = str(key or "").strip()
-        if not KEY_RE.match(key):
-            raise HueError("That does not look like an application key.")
-        found = await probe(host)
+        token = self._begin()
         try:
-            async with Link(found.ip, found.port, found.fingerprint, key) as link:
-                status, _data = await link.call("GET", "/clip/v2/resource/device")
+            key = str(key or "").strip()
+            if not KEY_RE.match(key):
+                raise HueError("That does not look like an application key.")
+            found = await probe(host, self.allow_loopback)
+            self._alive(token)
+            try:
+                async with Link(found.ip, found.port, found.fingerprint, key) as link:
+                    status, _data = await link.call("GET", "/clip/v2/resource/device")
+            except Exception as exc:
+                raise plain(exc) from None
+            if status in (401, 403):
+                raise HueError("The bridge did not accept that application key.")
+            if status != 200:
+                raise HueError("The bridge answered in a way this tool does not understand.")
+            await self._adopt(found, str(host).strip(), key, token)
+        except asyncio.CancelledError:
+            self._release(token)
+            raise
         except Exception as exc:
+            self._release(token)
             raise plain(exc) from None
-        if status in (401, 403):
-            raise HueError("The bridge did not accept that application key.")
-        if status != 200:
-            raise HueError("The bridge answered in a way this tool does not understand.")
-        await self._adopt(found, str(host).strip(), key)
         return self.status()
 
     def _require_free(self) -> None:
@@ -469,13 +549,16 @@ class HueService:
             raise HueError("A bridge is already set up. Forget it first to set up another.")
         if self.pairing == "waiting":
             raise HueError("Pairing is under way. Press the link button on the bridge, or forget the bridge to cancel.")
+        if self._setup is not None:
+            raise HueError("A set-up is under way. Wait for it to end, or forget the bridge to cancel it.")
 
-    async def _pair(self, found: Probe, host: str) -> None:
+    async def _pair(self, found: Probe, host: str, token: object) -> None:
         deadline = time.monotonic() + PAIR_TIMEOUT
         try:
             async with Link(found.ip, found.port, found.fingerprint) as link:
                 while True:
                     _status, data = await link.call("POST", "/api", {"devicetype": DEVICE_TYPE})
+                    self._alive(token)
                     item = data[0] if isinstance(data, list) and data and isinstance(data[0], dict) else {}
                     success = item.get("success") if isinstance(item.get("success"), dict) else None
                     error = item.get("error") if isinstance(item.get("error"), dict) else None
@@ -485,37 +568,60 @@ class HueService:
                     if not error or error.get("type") != 101:
                         raise HueError("The bridge refused the pairing request." if error else "That does not look like a Hue bridge.")
                     if time.monotonic() >= deadline:
-                        self.pairing = "timeout"
+                        self.pairing, self._setup = "timeout", None
                         await self._changed()
                         return
                     await asyncio.sleep(PAIR_INTERVAL)
-            await self._adopt(found, host, key)
+            await self._adopt(found, host, key, token)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self.pairing, self.error = None, str(plain(exc))
-            await self._changed()
+            if self._setup is token:    # a cancelled set-up says nothing: its bridge is not the user's concern any more
+                self.pairing, self.error, self._setup = None, str(plain(exc)), None
+                await self._changed()
 
-    async def _adopt(self, found: Probe, host: str, key: str) -> None:
-        self.config = {"host": host, "bridge_id": found.bridge_id, "name": found.name, "key": key, "fingerprint": found.fingerprint, "added": int(time.time())}
+    async def _adopt(self, found: Probe, host: str, key: str, token: object) -> None:
+        config = {"host": host, "bridge_id": found.bridge_id, "name": found.name, "key": key, "fingerprint": found.fingerprint, "added": int(time.time())}
+        self._alive(token)
+        self._save(config)      # first: a bridge that could not be written down is not adopted, not even for this session
+        self.config = config    # (no wait between the check above and here)
         self.error, self.devices, self.channel, self.last_read = None, {}, None, None
-        self._save()
         await self.refresh()
-        if self.pairing is not None:    # pairing is over only once the bridge was read: no "set up, never read" in between
-            self.pairing = None
-            await self._changed()
+        if self._setup is token:
+            if self.pairing is not None:    # pairing is over only once the bridge was read: no "set up, never read" in between
+                self.pairing = None
+                await self._changed()
+            self._setup = None
         self.start(read_now=False)      # just read: the next one is due in REFRESH_SECONDS
 
-    def _save(self) -> None:
-        if not self.path or self.config is None:
+    def _save(self, config: dict) -> None:
+        """Write the file owner-only from the first byte, flushed to disk before it replaces the old one. A failure is a plain sentence."""
+        if not self.path:
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".json.tmp")
-        tmp.unlink(missing_ok=True)
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)    # owner only from the first byte, not after the fact
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps(self.config, indent=2) + "\n")
-        os.replace(tmp, self.path)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp.unlink(missing_ok=True)
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)    # owner only from the first byte, not after the fact
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(config, indent=2) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, self.path)
+        except OSError:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise HueError("The bridge could not be saved on this computer, so it was not set up. Check that the data folder can be written to.") from None
+
+    async def search(self) -> list[dict]:
+        """Look for bridges, one search at a time: a request made meanwhile gets the running search's result."""
+        task = self._search
+        if task is None or task.done():
+            task = self._search = asyncio.create_task(discover(self.allow_loopback))
+            task.add_done_callback(lambda t: t.cancelled() or t.exception())    # an error nobody was left to read is not an unhandled one
+        return await asyncio.shield(task)
 
     # ---- reading
     def start(self, read_now: bool = True) -> None:
@@ -537,7 +643,7 @@ class HueService:
         async with self._lock:
             try:
                 host, port = split_host(config["host"])
-                ip = await target_address(host, port)      # looked up and checked again each time
+                ip = await target_address(host, port, self.allow_loopback)      # looked up and checked again each time
                 got = {}
                 async with Link(ip, port, config["fingerprint"], config["key"]) as link:
                     for resource in RESOURCES:
@@ -568,7 +674,8 @@ class HueService:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def forget(self) -> dict:
-        """Drop the bridge: key, certificate, names, and any pairing under way."""
+        """Drop the bridge: key, certificate, names, and any set-up under way, including one still in its first contact."""
+        self._setup = None      # first, with no wait before it: a set-up that wakes up from now on finds it was cancelled
         await self._cancel()
         self.config, self.devices, self.channel, self.last_read, self.error, self.pairing = None, {}, None, None, None, None
         if self.path:
@@ -577,4 +684,8 @@ class HueService:
         return self.status()
 
     async def stop(self) -> None:
+        self._setup = None
+        if self._search is not None and not self._search.done():
+            self._search.cancel()
+            await asyncio.gather(self._search, return_exceptions=True)
         await self._cancel()

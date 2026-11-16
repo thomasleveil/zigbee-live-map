@@ -5,8 +5,12 @@ Select a group with -k "hue and discover", "hue and pair", "hue and tls", "hue a
 """
 import asyncio
 import json
+import logging
+import os
 import stat
+import time
 import types
+from pathlib import Path
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
@@ -140,7 +144,9 @@ def test_hue_discover_lists_bridges_only_when_asked(tmp_path, monkeypatch):
 
 # ------------------------------------------------------------------------------------------ pair
 
-def test_hue_pair_waits_for_the_button_stores_the_key_and_never_shows_it(tmp_path, monkeypatch, capsys):
+def test_hue_pair_waits_for_the_button_stores_the_key_and_never_shows_it(tmp_path, monkeypatch, capsys, caplog):
+    caplog.set_level(logging.DEBUG)   # every logger, every level: the key must not be in any record either
+
     async def scenario(client, hub, origin, bridge):
         api, host = Api(client, origin), f"127.0.0.1:{bridge.port}"
         ws = await client.ws_connect(f"/ws?token={origin['X-ZLM-Token']}", headers=origin)
@@ -165,7 +171,8 @@ def test_hue_pair_waits_for_the_button_stores_the_key_and_never_shows_it(tmp_pat
         assert hue.HueService(tmp_path).configured                # a later session finds it again
         texts = api.seen + await drain(ws) + [json.dumps(hub.hello()), json.dumps(hub.hue.status()), json.dumps(hub.hue.view())]
         out, err = capsys.readouterr()
-        assert not [text for text in texts + [out, err] if bridge.app_key in text]   # nowhere: not in answers, pages, logs
+        logged = [caplog.text] + [f"{r.getMessage()} {r.exc_text or ''} {r.args}" for r in caplog.records]
+        assert not [text for text in texts + [out, err] + logged if bridge.app_key in text]   # nowhere: not in answers, pages, stdout, stderr or log records
         await ws.close()
 
     run(scenario, tmp_path, monkeypatch, press_after=0.2)
@@ -308,13 +315,14 @@ def test_hue_enrich_pages_are_told_when_something_changes(tmp_path, monkeypatch)
         for _ in range(3):
             await ws.receive_json()                                  # hello, status, backlog
         bridge.set_status(LAMP, "disconnected")
+        bridge.set_name(LAMP, "Kitchen lamp (old)")                 # names are sent again only when one changed
         await api("POST", "/api/hue/refresh")
         kinds = {}
         for text in await drain(ws):
             message = json.loads(text)
             kinds[message["type"]] = message
         assert kinds["hue"]["devices"][LAMP]["status"] == "disconnected" and kinds["hue"]["lastRead"]
-        assert "key" not in kinds["hue"] and kinds["names"]["names"][LAMP] == {"name": "Kitchen lamp"}
+        assert "key" not in kinds["hue"] and kinds["names"]["names"][LAMP] == {"name": "Kitchen lamp (old)"}
         await api("DELETE", "/api/hue")
         assert [json.loads(t) for t in await drain(ws)][-1] == {"type": "hue", **hub.hue.view()}   # forgetting reaches the pages too
         assert hub.hue.view()["configured"] is False
@@ -426,7 +434,7 @@ def test_hue_idle_refuses_addresses_that_are_not_on_the_local_network(tmp_path, 
     async def scenario(client, hub, origin, bridge):
         api = Api(client, origin)
         for host in ("93.184.216.34", "93.184.216.34:8443", "8.8.8.8", "[2001:4860:4860::8888]:443", "::ffff:8.8.8.8", "0.0.0.0", "224.0.0.251",
-                     "100.64.0.1", "http://10.0.0.5/x", "10.0.0.5/x", "a b", "", "10.0.0.5:99999", "10.0.0.5:0"):
+                     "100.64.0.1", "http://10.0.0.5/x", "10.0.0.5/x", "a b", "", "10.0.0.5:99999", "10.0.0.5:0", "bridge:abc", "a..b"):
             for path, body in (("/api/hue/pair", {"host": host}), ("/api/hue/key", {"host": host, "key": bridge.app_key})):
                 status, answer = await api("POST", path, body)
                 assert status == 400 and answer["error"], (host, path)
@@ -462,3 +470,436 @@ def test_hue_idle_the_address_check_lets_the_local_network_through():
     for address in ("8.8.8.8", "2001:4860:4860::8888", "::ffff:8.8.8.8", "0.0.0.0", "224.0.0.251", "not an address"):
         with pytest.raises(hue.HueError):
             hue.check_address(address)
+
+
+# ------------------------------------------------------------------------------------------ set-up that fails, is cancelled, or cannot be saved
+
+def test_hue_idle_a_failed_setup_of_any_kind_leaves_the_service_free(tmp_path, monkeypatch):
+    """Whatever the exception type, the next set-up is accepted and the user got a sentence, never a 500."""
+    async def scenario(client, hub, origin, bridge):
+        api, good = Api(client, origin), f"127.0.0.1:{bridge.port}"
+        real_probe = hue.probe
+
+        async def broken(*_args, **_kwargs):
+            raise ZeroDivisionError(f"not a thing to show: {bridge.app_key}")
+
+        async def accepted():
+            status, body = await api("POST", "/api/hue/pair", {"host": good})
+            assert status == 200 and body["pairing"] == "waiting", body
+            assert (await api("DELETE", "/api/hue"))[0] == 200            # cancel it: the next one starts from nothing
+
+        for host in ("bridge:abc", "a..b"):
+            for path, body in (("/api/hue/pair", {"host": host}), ("/api/hue/key", {"host": host, "key": bridge.app_key})):
+                status, answer = await api("POST", path, body)
+                assert status == 400 and answer["error"].endswith("."), (host, path, status, answer)
+                assert hub.hue.pairing is None and not hub.hue.configured
+                await accepted()
+        monkeypatch.setattr(hue, "probe", broken)
+        for path, body in (("/api/hue/pair", {"host": good}), ("/api/hue/key", {"host": good, "key": bridge.app_key})):
+            status, answer = await api("POST", path, body)
+            assert status == 400 and answer["error"] == "Something unexpected went wrong talking to the bridge.", (path, status, answer)
+            assert hub.hue.pairing is None and bridge.app_key not in json.dumps(answer)
+        monkeypatch.setattr(hue, "probe", real_probe)
+        await accepted()
+
+    run(scenario, tmp_path, monkeypatch, press_after=3600)
+
+
+def gate_first_contact(monkeypatch):
+    """The first contact with a bridge waits for `release`; any later one goes straight through."""
+    entered, release, real = asyncio.Event(), asyncio.Event(), hue.fetch_certificate
+    calls = []
+
+    async def slow(ip, port):
+        calls.append(ip)
+        if len(calls) == 1:
+            entered.set()
+            await release.wait()
+        return await real(ip, port)
+
+    monkeypatch.setattr(hue, "fetch_certificate", slow)
+    return entered, release
+
+
+def test_hue_forget_during_the_first_contact_means_the_pairing_never_starts(tmp_path, monkeypatch):
+    entered, release = gate_first_contact(monkeypatch)
+
+    async def scenario(client, hub, origin, bridge):
+        api, host = Api(client, origin), f"127.0.0.1:{bridge.port}"
+        first = asyncio.ensure_future(api("POST", "/api/hue/pair", {"host": host}))
+        await asyncio.wait_for(entered.wait(), 5)
+        assert hub.hue.pairing == "waiting"
+        assert (await api("DELETE", "/api/hue"))[0] == 200 and hub.hue.pairing is None
+        release.set()
+        status, body = await first
+        assert status == 400 and body["error"], (status, body)           # a sentence: that set-up was cancelled
+        await asyncio.sleep(0.4)                                          # the button is "pressed" from the first attempt on
+        assert bridge.pair_attempts == 0 and hub.hue._tasks == []         # no task was left to adopt a key later
+        assert not hub.hue.configured and not (tmp_path / "hue.json").exists() and hub.hue.pairing is None
+
+    run(scenario, tmp_path, monkeypatch, press_after=0.0)
+
+
+def test_hue_forget_during_the_first_contact_leaves_a_second_setup_as_the_only_one_alive(tmp_path, monkeypatch):
+    entered, release = gate_first_contact(monkeypatch)
+
+    async def scenario(client, hub, origin, bridge):
+        api, host = Api(client, origin), f"127.0.0.1:{bridge.port}"
+        first = asyncio.ensure_future(api("POST", "/api/hue/pair", {"host": host}))
+        await asyncio.wait_for(entered.wait(), 5)
+        await api("DELETE", "/api/hue")
+        status, body = await api("POST", "/api/hue/pair", {"host": host})   # the second set-up: not gated, so it gets going
+        assert status == 200 and body["pairing"] == "waiting"
+        release.set()
+        assert (await first)[0] == 400                                       # the first one ends, and says so
+        assert hub.hue.pairing == "waiting" and hub.hue.error is None        # without touching the second one's state
+        assert len(hub.hue._tasks) == 1
+        await until(lambda: hub.hue.configured and hub.hue.pairing is None)
+        assert json.loads((tmp_path / "hue.json").read_text())["key"] == bridge.app_key
+        assert len(hub.hue._tasks) == 1                                      # the periodic read: one task, no second pairing
+
+    run(scenario, tmp_path, monkeypatch, press_after=0.3)
+
+
+def test_hue_forget_while_a_key_is_being_checked_means_it_is_never_stored(tmp_path, monkeypatch):
+    entered, release, real_call = asyncio.Event(), asyncio.Event(), hue.Link.call
+
+    async def slow_call(self, method, path, body=None):
+        if path.startswith("/clip"):
+            entered.set()
+            await release.wait()
+        return await real_call(self, method, path, body)
+
+    monkeypatch.setattr(hue.Link, "call", slow_call)
+
+    async def scenario(client, hub, origin, bridge):
+        api, host = Api(client, origin), f"127.0.0.1:{bridge.port}"
+        first = asyncio.ensure_future(api("POST", "/api/hue/key", {"host": host, "key": bridge.app_key}))
+        await asyncio.wait_for(entered.wait(), 5)
+        assert (await api("DELETE", "/api/hue"))[0] == 200
+        release.set()
+        status, body = await first
+        assert status == 400 and body["error"] and bridge.app_key not in json.dumps(body)
+        await asyncio.sleep(0.2)
+        assert not hub.hue.configured and not (tmp_path / "hue.json").exists() and hub.hue.devices == {} and hub.hue._tasks == []
+        assert hub.hue.status()["configured"] is False
+
+    run(scenario, tmp_path, monkeypatch)
+
+
+def test_hue_pair_a_second_setup_is_refused_while_one_is_under_way(tmp_path, monkeypatch):
+    entered, release = gate_first_contact(monkeypatch)
+
+    async def scenario(client, hub, origin, bridge):
+        api, host = Api(client, origin), f"127.0.0.1:{bridge.port}"
+        first = asyncio.ensure_future(api("POST", "/api/hue/key", {"host": host, "key": bridge.app_key}))
+        await asyncio.wait_for(entered.wait(), 5)
+        status, body = await api("POST", "/api/hue/key", {"host": host, "key": bridge.app_key})
+        assert status == 400 and "under way" in body["error"]                # no two set-ups adopting the same bridge
+        release.set()
+        assert (await first)[0] == 200 and hub.hue.configured
+
+    run(scenario, tmp_path, monkeypatch)
+
+
+def test_hue_pair_a_file_that_cannot_be_written_is_said_plainly_and_nothing_is_adopted(tmp_path, monkeypatch):
+    real_replace = os.replace
+
+    def failing(src, dst, *args, **kwargs):
+        if str(src).endswith("hue.json.tmp"):
+            raise PermissionError(13, f"denied for {src}")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", failing)
+
+    async def scenario(client, hub, origin, bridge):
+        api, host = Api(client, origin), f"127.0.0.1:{bridge.port}"
+        status, body = await api("POST", "/api/hue/key", {"host": host, "key": bridge.app_key})
+        assert status == 400 and "could not be saved" in body["error"] and "reach" not in body["error"], body
+        assert str(tmp_path) not in body["error"] and bridge.app_key not in json.dumps(body)
+        assert not hub.hue.configured and hub.hue.devices == {} and hub.hue._tasks == []
+        assert list(tmp_path.glob("hue.json*")) == []                        # neither the file nor its temporary copy
+        # pairing hits the same wall after the button is pressed: the user is told, and the service is free again
+        status, body = await api("POST", "/api/hue/pair", {"host": host})
+        assert status == 200
+        await until(lambda: hub.hue.pairing != "waiting")
+        state = (await api("GET", "/api/hue"))[1]
+        assert state["configured"] is False and "could not be saved" in state["error"] and state["pairing"] is None, state
+        assert list(tmp_path.glob("hue.json*")) == [] and hub.hue._tasks == []
+        monkeypatch.setattr(os, "replace", real_replace)                     # the disk is back: the next attempt works
+        assert (await set_up(api, bridge))["error"] is None and (tmp_path / "hue.json").is_file()
+
+    run(scenario, tmp_path, monkeypatch)
+
+
+def test_hue_pair_the_file_is_flushed_to_disk_before_it_replaces_the_old_one(tmp_path, monkeypatch):
+    order, real_fsync, real_replace = [], os.fsync, os.replace
+
+    def fsync(fd):
+        order.append("fsync")
+        return real_fsync(fd)
+
+    def replace(src, dst, *args, **kwargs):
+        if str(src).endswith("hue.json.tmp"):
+            order.append("replace")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    monkeypatch.setattr(os, "replace", replace)
+
+    async def scenario(client, hub, origin, bridge):
+        await set_up(Api(client, origin), bridge)
+        assert "replace" in order and "fsync" in order and order.index("fsync") < order.index("replace"), order
+
+    run(scenario, tmp_path, monkeypatch)
+
+
+# ------------------------------------------------------------------------------------------ the address allowlist
+
+NETWORKS = {   # range: (a few addresses inside it, a few just outside it)
+    "10.0.0.0/8": (("10.0.0.1", "10.255.255.254", "::ffff:10.0.0.1"), ("9.255.255.255", "11.0.0.0")),
+    "172.16.0.0/12": (("172.16.0.1", "172.31.255.254"), ("172.15.255.255", "172.32.0.0")),
+    "192.168.0.0/16": (("192.168.0.1", "192.168.255.254"), ("192.167.255.255", "192.169.0.0")),
+    "169.254.0.0/16": (("169.254.0.1", "169.254.255.254"), ("169.253.255.255", "169.255.0.0")),
+    "fc00::/7": (("fc00::1", "fdff:ffff::1", "fd00::17"), ("fb00::1", "fe00::1")),
+    "fe80::/10": (("fe80::1", "febf::1"), ("fe7f::1", "fec0::1")),
+}
+WIDER_THAN_THE_LOCAL_NETWORK = (    # what Python's `is_private` calls private, and that can lead to the internet
+    "198.18.0.1", "198.19.255.254",                         # 198.18.0.0/15: fake-IP proxies forward it
+    "2001::1", "2001:0:4136:e378:8000:63bf:3fff:fdd2",      # Teredo, 2001::/32
+    "64:ff9b:1::1", "64:ff9b:1::a00:1",                     # NAT64 local-use, 64:ff9b:1::/48
+    "::ffff:198.18.0.1", "::ffff:8.8.8.8",                  # IPv4-mapped: judged as the IPv4 it carries
+    "192.0.2.1", "198.51.100.1", "203.0.113.1", "240.0.0.1", "0.0.0.1", "100.64.0.1", "2001:db8::1", "::", "0.0.0.0", "224.0.0.251", "ff02::fb")
+
+
+def test_hue_idle_the_address_filter_is_an_explicit_allowlist_not_pythons_notion_of_private():
+    for network, (inside, outside) in NETWORKS.items():
+        for address in inside:
+            assert hue.check_address(address, loopback=False) == address, (network, address)
+        for address in outside:
+            with pytest.raises(hue.HueError):
+                hue.check_address(address, loopback=False)
+            with pytest.raises(hue.HueError):
+                hue.check_address(address, loopback=True)       # allowing loopback widens nothing else
+    for address in WIDER_THAN_THE_LOCAL_NETWORK:
+        for loopback in (False, True):
+            with pytest.raises(hue.HueError):
+                hue.check_address(address, loopback=loopback)
+
+
+def test_hue_idle_loopback_is_accepted_only_when_the_tool_itself_is_bound_to_loopback():
+    for address in ("127.0.0.1", "127.255.255.254", "::1", "::ffff:127.0.0.1"):
+        assert hue.check_address(address, loopback=True) == address
+        assert hue.check_address(address) == address                # the default keeps today's behaviour
+        with pytest.raises(hue.HueError) as refused:
+            hue.check_address(address, loopback=False)
+        assert "this computer" in str(refused.value)
+    own = {"name": "x._hue._tcp.local.", "addresses": ["127.0.0.1"], "port": 443, "properties": {}}
+    assert hue.parse_service(own, loopback=True)["host"] == "127.0.0.1" and hue.parse_service(own, loopback=False) is None
+
+
+def test_hue_idle_a_tool_reachable_from_the_network_never_contacts_its_own_computer(tmp_path, monkeypatch):
+    async def main():
+        fake = FakeBridge()
+        await fake.start()
+        host = f"127.0.0.1:{fake.port}"
+        service = HueService(tmp_path, allow_loopback=False)
+        try:
+            for call in (lambda: service.start_pairing(host), lambda: service.set_key(host, fake.app_key)):
+                with pytest.raises(hue.HueError, match="this computer"):
+                    await call()
+            async def local_name(_host, _port):
+                return ["127.0.0.1"]
+            monkeypatch.setattr(hue, "resolve", local_name)               # a name that points back at this computer
+            with pytest.raises(hue.HueError, match="this computer"):
+                await service.start_pairing("bridge.local")
+            service.config = {"host": host, "bridge_id": BRIDGE_ID, "name": "x", "key": fake.app_key, "fingerprint": "0" * 64, "added": 1}
+            await service.refresh()                                       # a bridge stored earlier is held to the same rule
+            assert "this computer" in service.error
+            assert fake.requests == [] and service.pairing is None and service._tasks == []
+        finally:
+            await service.stop()
+            await fake.stop()
+            fake.close()
+
+    asyncio.run(main())
+
+
+def test_hue_idle_serve_hands_the_service_whether_the_tool_is_bound_to_loopback(tmp_path, monkeypatch):
+    from zigbee_live_map import server
+    from zigbee_live_map.access import Access
+
+    seen = []
+
+    class Spy(HueService):
+        def __init__(self, *args, **kwargs):
+            seen.append(kwargs.get("allow_loopback"))
+            super().__init__(*args, **kwargs)
+
+    class Stop(Exception):
+        pass
+
+    def stop(*_args, **_kwargs):
+        raise Stop
+
+    monkeypatch.setattr(server, "HueService", Spy)
+    monkeypatch.setattr(server, "build_app", stop)     # the service is built just before: nothing needs to listen
+    args = types.SimpleNamespace(demo=True, replay=None, data_dir=str(tmp_path), channel=11, focus=None, backlog=100, speed=1.0, pcap=None, port=0, open=False)
+    for access in (Access(), Access(host="0.0.0.0", password="x")):
+        with pytest.raises(Stop):
+            asyncio.run(server.serve(args, access))
+    assert seen == [True, False]
+
+
+# ------------------------------------------------------------------------------------------ discovery is bounded
+
+def test_hue_discover_follows_up_at_most_sixteen_names_and_within_the_deadline():
+    asked = []
+
+    async def request(name, timeout_ms):
+        asked.append(name)
+        await asyncio.sleep(0.01)
+        return {"name": name, "addresses": ["10.0.0.9"], "port": 443, "properties": {}}
+
+    names = {f"b{n:03d}._hue._tcp.local." for n in range(200)}      # a network that announces far more than any home has
+    records = asyncio.run(hue.follow_up(names, request, 5.0))
+    assert hue.MAX_ANNOUNCED == 16 and len(asked) == len(records) == 16
+    assert sorted(asked) == sorted(names)[:16]                      # the same sixteen each time
+
+    async def stuck(name, timeout_ms):
+        await asyncio.sleep(30)
+
+    started = time.monotonic()
+    assert asyncio.run(hue.follow_up(names, stuck, 0.3)) == []       # whatever is announced, the budget is the budget
+    assert time.monotonic() - started < 2.0
+
+
+def test_hue_discover_the_whole_search_has_one_overall_deadline(monkeypatch):
+    monkeypatch.setattr(hue, "DISCOVER_DEADLINE", 0.2)
+
+    async def hangs(timeout):
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(hue, "browse_mdns", hangs)
+    started = time.monotonic()
+    with pytest.raises(hue.HueError, match="too long"):
+        asyncio.run(hue.discover())
+    assert time.monotonic() - started < 2.0
+
+
+def test_hue_discover_the_real_deadline_is_about_six_seconds():
+    assert 5.0 <= hue.DISCOVER_DEADLINE <= 7.0 and hue.DISCOVER_DEADLINE > hue.DISCOVER_SECONDS
+
+
+def test_hue_discover_one_search_runs_at_a_time(tmp_path, monkeypatch):
+    calls, release = [], asyncio.Event()
+
+    async def slow_browse(timeout):
+        calls.append(timeout)
+        await release.wait()
+        return RECORDS
+
+    monkeypatch.setattr(hue, "browse_mdns", slow_browse)
+
+    async def scenario(client, hub, origin, bridge):
+        api = Api(client, origin)
+        first = asyncio.ensure_future(api("POST", "/api/hue/discover"))
+        await until(lambda: len(calls) == 1)
+        second = asyncio.ensure_future(api("POST", "/api/hue/discover"))
+        await asyncio.sleep(0.2)
+        assert len(calls) == 1                                            # the second request did not start another search
+        release.set()
+        (status1, body1), (status2, body2) = await first, await second
+        assert status1 == status2 == 200 and body1 == body2 and len(body1["bridges"]) == 2   # it got the first one's result
+        assert (await api("POST", "/api/hue/discover"))[0] == 200 and len(calls) == 2         # once finished, a new one may start
+
+    run(scenario, tmp_path, monkeypatch)
+
+
+def test_hue_discover_a_name_that_never_resolves_times_out(monkeypatch):
+    monkeypatch.setattr(hue, "RESOLVE_TIMEOUT", 0.1)
+    monkeypatch.setattr(hue.socket, "getaddrinfo", lambda *a, **k: time.sleep(0.6))   # runs in the resolver thread
+
+    async def main():
+        started = time.monotonic()
+        with pytest.raises(hue.HueError, match="does not resolve"):
+            await hue.target_address("slow.example", 443)
+        return time.monotonic() - started
+
+    assert asyncio.run(main()) < 0.5
+
+
+# ------------------------------------------------------------------------------------------ scoped IPv6
+
+def test_hue_idle_a_scoped_ipv6_address_is_refused_at_entry_with_a_plain_sentence(tmp_path, monkeypatch):
+    monkeypatch.setattr(hue, "fetch_certificate", boom)
+
+    async def scenario(client, hub, origin, bridge):
+        api = Api(client, origin)
+        for host in ("fe80::1%en0", "[fe80::1%en0]:443", "fe80::1%25en0", "fe80::1%1"):
+            for path, body in (("/api/hue/pair", {"host": host}), ("/api/hue/key", {"host": host, "key": bridge.app_key})):
+                status, answer = await api("POST", path, body)
+                assert status == 400 and "IPv4" in answer["error"] and "could not reach" not in answer["error"].lower(), (host, path, answer)
+        assert not hub.hue.configured and hub.hue.pairing is None and DIALLED == []
+
+    run(scenario, tmp_path, monkeypatch)
+    for host in ("fe80::1%en0", "[fe80::1%en0]:443"):
+        with pytest.raises(hue.HueError, match="IPv4"):
+            hue.split_host(host)
+    with pytest.raises(hue.HueError, match="IPv4"):
+        hue.check_address("fe80::1%en0")
+
+
+# ------------------------------------------------------------------------------------------ names, field by field
+
+def test_hue_enrich_a_list_entry_without_a_name_does_not_hide_the_bridges_name(tmp_path, monkeypatch):
+    async def scenario(client, hub, origin, bridge):
+        home = hub.store.create("Home")
+        hub.store.lists[home]["devices"][LAMP] = {"model": "LCT015", "nwk": "0x1234"}      # import allows an entry with no name
+        hub.store.lists[home]["devices"][STRIP] = {"name": "", "model": "ST-1"}
+        hub.store.lists[home]["devices"][DIMMER] = {"name": "My dimmer", "model": "DM-1"}
+        saved = json.dumps(hub.store.lists, sort_keys=True)
+        await set_up(Api(client, origin), bridge)
+        names = hub.names()
+        assert names[LAMP] == {"model": "LCT015", "nwk": "0x1234", "name": "Kitchen lamp"}   # the bridge's name, the entry's other fields kept
+        assert names[STRIP] == {"name": "Kitchen strip", "model": "ST-1"}
+        assert names[DIMMER] == {"name": "My dimmer", "model": "DM-1"}                       # a name in a list still wins
+        assert names[BEDROOM_LAMP] == {"name": "Bedroom lamp"}                               # no list entry: the bridge's alone
+        assert json.dumps(hub.store.lists, sort_keys=True) == saved                          # nothing written into the lists
+        assert hub.hello()["names"] == names
+
+    run(scenario, tmp_path, monkeypatch)
+
+
+def test_hue_enrich_the_rename_box_shows_the_bridges_name_as_a_placeholder_not_a_value():
+    page = (Path(hue.__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
+    assert "renameInput\").placeholder" in page                                # the bridge's name is a hint
+    assert "renameInput\").value = ownName(" in page                           # the value is what the user's own lists say
+    assert "renameInput\").value = nameOf(" not in page
+
+
+# ------------------------------------------------------------------------------------------ pages are told only about changes
+
+def test_hue_enrich_pages_are_told_only_when_the_names_or_the_hub_data_changed(tmp_path, monkeypatch):
+    async def scenario(client, hub, origin, bridge):
+        api = Api(client, origin)
+        await set_up(api, bridge)
+        ws = await client.ws_connect(f"/ws?token={origin['X-ZLM-Token']}", headers=origin)
+        for _ in range(3):
+            await ws.receive_json()
+        before = (await api("GET", "/api/hue"))[1]["lastRead"]
+        await asyncio.sleep(0.05)
+        await hub.hue.refresh()                                              # the periodic read, with nothing new
+        assert await drain(ws) == []                                         # the read time alone is no reason to wake every page
+        assert (await api("GET", "/api/hue"))[1]["lastRead"] > before        # a status request still gives it
+        bridge.set_status(LAMP, "disconnected")
+        await hub.hue.refresh()
+        assert [json.loads(t)["type"] for t in await drain(ws)] == ["hue"]   # the hub data changed, the names did not
+        bridge.set_name(LAMP, "Kitchen lamp 2")
+        await hub.hue.refresh()
+        assert [json.loads(t)["type"] for t in await drain(ws)] == ["names", "hue"]
+        await hub.hue.refresh()
+        assert await drain(ws) == []
+        await ws.close()
+
+    run(scenario, tmp_path, monkeypatch)
