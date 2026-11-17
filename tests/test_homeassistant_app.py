@@ -102,6 +102,13 @@ def test_runs_under_the_base_images_init_and_pulls_the_published_image():
     assert CONFIG["usb"] is True   # raw /dev/bus/usb: libusb is not a serial port
 
 
+def test_config_asks_for_the_core_api_so_home_assistant_device_names_can_be_read():
+    assert CONFIG["homeassistant_api"] is True   # grants the device registry read; the Supervisor injects the token
+    docs = (APP / "DOCS.md").read_text(encoding="utf-8")
+    assert "homeassistant_api" in docs   # the manifest key is named in the docs
+    assert "uninstall" in docs.lower() and "reinstall" in docs.lower()   # a manifest change needs reinstall, not a reload
+
+
 def test_ingress_port_matches_the_start_script():
     assert CONFIG["ingress"] is True
     declared = re.search(r"^INGRESS_PORT=(\d+)", START, re.M)

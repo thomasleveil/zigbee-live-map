@@ -28,6 +28,12 @@ panel_title: "Zigbee map"
 # Default is true, stated on purpose: the page shows live radio traffic and, once entered, network keys.
 panel_admin: true
 
+# Home Assistant Core API: lets the app read Home Assistant's device registry, so a sniffed device shows the
+# friendly name the user already gave it (matched by IEEE). The Supervisor injects the token that authorises it.
+# https://contributors.home-assistant.io/apps/reference/configuration/
+# Changing this key on an installed app needs uninstall + reinstall: a store reload does not re-read the manifest.
+homeassistant_api: true
+
 # Raw USB (libusb/pyusb needs /dev/bus/usb, not a serial port):
 # https://contributors.home-assistant.io/apps/guides/hardware/ ("usb: true", hotplug included).
 # UNVERIFIED on hardware: whether this key alone lets pyusb open the CC2531 (0451:16ae).
