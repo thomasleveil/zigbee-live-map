@@ -2,6 +2,8 @@
 
 Watch your Zigbee network talk, live, in your browser.
 
+[![Open your Home Assistant instance and show the add app repository dialog with a specific repository URL pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fthomasleveil%2Fzigbee-live-map)
+
 A cheap USB sniffer dongle listens to the radio. Every frame becomes an animation on a map of your devices and a plain-language line in a log, so you can see who talks to whom, which router relays what, where a link is struggling, and how the mesh actually works.
 
 ![The live map on the built-in demo network](docs/screenshot.png)
