@@ -741,6 +741,7 @@ function renderCard() {
 function findIssues() {
   const out = [];
   if (S.security && S.security.vulnerable) out.push({ weight: 100, node: null, text: t("issues.vulnerable") });
+  else if (S.security && S.security.touchlinkRecovered) out.push({ weight: 100, node: null, text: t("issues.touchlink") });
   if (S.hue.configured && S.hue.error) out.push({ weight: 6, node: null, text: t("issues.hueError", { error: S.hue.error }) });
   // Listening on another channel than the bridge's network: say it once, rather than blaming each device for never being heard.
   const wrongChannel = S.mode === "live" && S.hue.configured && S.hue.channel != null && S.channel != null && S.hue.channel !== S.channel;
@@ -866,17 +867,18 @@ function buildSecurity() {
 }
 function renderSecurity() {
   const s = S.security || {};
-  $("btnSecurity").classList.toggle("vuln", !!s.vulnerable);
+  $("btnSecurity").classList.toggle("vuln", !!(s.vulnerable || s.touchlinkRecovered));
   if (!secDialog) return;
   ZLM.translate(secDialog);
   secDialog.querySelector("#secWizard").innerHTML = numberedList("sec.step").map(x => `<li>${rich(x)}</li>`).join("");
   const box = secDialog.querySelector("#secVerdict");
   let cls = "wait", html = `<b>${esc(t("sec.verdict.untested"))}</b>`;
   if (s.vulnerable) { cls = "vuln"; html = `<b>${esc(t("sec.verdict.vuln"))}</b><p>${rich(t("sec.verdict.vulnBody"))}</p>`; if (s.key) html += `<span class="keyval">${esc(s.key)}</span>`; }
+  else if (s.touchlinkRecovered) { cls = "vuln"; html = `<b>${esc(t("sec.verdict.touchlink"))}</b><p>${rich(t("sec.verdict.touchlinkBody"))}</p>`; if (s.key) html += `<span class="keyval">${esc(s.key)}</span>`; }
   else if (s.secureJoinSeen) { cls = "safe"; html = `<b>${esc(t("sec.verdict.safe"))}</b><p>${rich(t("sec.verdict.safeBody"))}</p>`; }
   box.className = "secbox " + cls; box.innerHTML = html;
   const save = secDialog.querySelector("#secSaveKey");
-  save.closest("section").hidden = !(s.vulnerable && s.key && s.pan);
+  save.closest("section").hidden = !((s.vulnerable || s.touchlinkRecovered) && s.key && s.pan);
   save.textContent = t("sec.save.button", { pan: s.pan || "" });
   secDialog.querySelector("#secKeyMsg").textContent = secKeyMsg;
 }

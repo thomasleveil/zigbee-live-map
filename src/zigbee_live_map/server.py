@@ -109,7 +109,7 @@ class Hub:
         self.source: LiveSource | None = None
         # Security: what this network's own traffic reveals once a key is known or recovered.
         self.network_key: bytes | None = None   # held in memory only, never written to disk
-        self.key_source: str | None = None       # "recovered" (from a default-key join) or "entered"
+        self.key_source: str | None = None       # "recovered" (default-key join), "touchlink", "saved", or "entered"
         self.vulnerable = False                   # a join was secured with the default link key
         self.secure_join_seen = False             # a join was secured with a non-default link key
         self.touchlink_recovered = False          # the network key was recovered from a Touchlink (ZLL) join
