@@ -38,6 +38,7 @@ import contextlib
 import hmac
 import json
 import math
+import os
 import re
 import secrets
 import sys
@@ -54,6 +55,7 @@ from . import __version__, access as accessmod, crypto, decode, demo, keys as ke
 from .access import INGRESS, LAN, LOCAL, Access, LoginGuard, Sessions
 from .devices import DeviceError, DeviceStore
 from .frames import Classifier, read_pcap
+from .ha import HaNames
 from .hue import HueService
 from .keys import KeyStore
 from .vendors import Registry, VendorError
@@ -91,11 +93,13 @@ class Hub:
     """Keeps the recent events and fans every new one out to the connected pages."""
 
     def __init__(self, store: DeviceStore, registry: Registry, info: dict, backlog: int, keys: KeyStore | None = None,
-                 hue: HueService | None = None) -> None:
+                 hue: HueService | None = None, ha: HaNames | None = None) -> None:
         self.store, self.registry, self.info = store, registry, info
         self.keys = keys if keys is not None else KeyStore(None)
         self.hue = hue if hue is not None else HueService(None)   # memory only, and silent until the user sets a bridge up
         self.hue.on_change = self.hue_changed
+        self.ha = ha if ha is not None else HaNames(None)   # inert unless the Supervisor started the tool (a token)
+        self.ha.on_change = self.ha_changed
         self.status = {"type": "status", "sniffer": "starting", "detail": "", "reason": ""}
         self._dongle_logged: tuple | None = None   # the dongle state last written to the log, and whether it was ever read (see log_dongle)
         self._dongle_was_read = False
@@ -122,9 +126,13 @@ class Hub:
         """What the pages call a device: the user's lists first, the bridge's own name for any device no list names.
 
         Field by field: a list entry that has no name (only a model or a short address, which import allows) keeps its other fields
-        and takes the bridge's name. Computed on the way out and written nowhere: the lists stay exactly what the user made them.
+        and takes a fallback name. The fallback is the Hue bridge's own name, or the name Home Assistant already has for the
+        device (matched by IEEE), for any device the Hue path did not name. Computed on the way out and written nowhere:
+        the lists stay exactly what the user made them.
         """
         names = self.hue.fallback_names()
+        for ieee, entry in self.ha.fallback_names().items():
+            names.setdefault(ieee, entry)   # the Hue path already names Hue-bridge devices; Home Assistant fills the rest
         for ieee, entry in self.store.merged().items():
             merged = dict(entry)
             if not merged.get("name") and ieee in names:
@@ -265,6 +273,11 @@ class Hub:
         if stamp != self._hue_sent:
             self._hue_sent = stamp
             await self.send_all({"type": "hue", **view})
+
+    async def ha_changed(self) -> None:
+        """Home Assistant's device names were read or changed: the pages get the new names, but only if they differ."""
+        if json.dumps(self.names(), sort_keys=True) != self._names_sent:
+            await self.names_changed()
 
     async def tune(self, channel: int) -> None:
         if self.source is None or channel not in range(11, 27) or channel == self.info["channel"]:
@@ -853,6 +866,7 @@ def build_app(hub: Hub, access: Access | None = None, clock=time.monotonic) -> w
         web.post("/api/hue/pair", api_hue_pair), web.post("/api/hue/key", api_hue_key), web.post("/api/hue/refresh", api_hue_refresh),
     ])
     app.on_cleanup.append(lambda _app: hub.hue.stop())
+    app.on_cleanup.append(lambda _app: hub.ha.stop())
     return app
 
 
@@ -890,8 +904,10 @@ async def serve(args, access: Access | None = None) -> None:
     info = {"channel": args.channel if mode == "live" else None, "mode": mode, "focus": args.focus, "can_tune": mode == "live",
             "ha_app": access.ingress}
     hub = Hub(store, Registry(data_dir), info, args.backlog, keys=KeyStore(None if mode == "demo" else data_dir),
-              hue=HueService(None if mode == "demo" else data_dir, allow_loopback=access.local))
+              hue=HueService(None if mode == "demo" else data_dir, allow_loopback=access.local),
+              ha=HaNames(None if mode == "demo" else os.environ.get(accessmod.SUPERVISOR_ENV)))
     hub.hue.start()   # only reads a bridge the user set up in an earlier session; nothing at all otherwise
+    hub.ha.start()    # reads Home Assistant's device names only when the Supervisor started the tool; nothing otherwise
     queue: asyncio.Queue = asyncio.Queue()
     tasks = [asyncio.create_task(pump(queue, hub))]
     if mode == "demo":

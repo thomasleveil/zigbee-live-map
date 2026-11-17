@@ -20,6 +20,14 @@ Start the app, then use **Open Web UI** on this page, or turn on **Show in sideb
 | Password | Only needed if you also publish the port (below). Not used through Home Assistant. |
 | Allowed host names | Only for a published port, and only together with a password (the app does not start with host names and no password): the names or addresses your browser types to reach it, for example `homeassistant.local` or `192.168.1.5:8099`. Add `:port` when the port you publish is not 8099. Without them the page refuses the request. |
 
+## Device names from Home Assistant
+
+A sniffer cannot hear a device's name: names live only in a hub, not on the air. When this runs as a Home Assistant app it reads the friendly names you already gave your Zigbee devices from Home Assistant itself (its device registry), matched to the devices it hears by IEEE address. Your own lists and imports still win: a Home Assistant name only fills in a device you have not named yourself. Nothing is written back to Home Assistant, and no network key or Hue bridge is needed for this.
+
+This works for devices Home Assistant manages through ZHA. Devices managed through Zigbee2MQTT or the Hue integration may be shaped differently in the registry; those are used where they match and skipped where they do not. Outside Home Assistant nothing is contacted.
+
+This uses the `homeassistant_api: true` key in the app's manifest. If you installed the app before this feature existed, **uninstall and reinstall it**: Home Assistant reads the manifest only at install, so a store reload or an update alone does not turn the permission on.
+
 ## Where your data is kept
 
 In the app's private `/data` directory, which survives restarts and updates and is part of the app's backups: the lists of known devices, network keys you save in *Settings*, a Hue Bridge key if you set one up, and updates of the chip maker registry. Nothing is written elsewhere. In demo mode nothing is kept.
