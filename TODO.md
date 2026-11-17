@@ -20,8 +20,8 @@ sniffing is one data source among several.
   - Test it on a Home Assistant machine that enforces AppArmor, with the CC2531 plugged in: `usb: true` alone
     is enough on the test bench (no AppArmor there); is a custom AppArmor profile needed where it is enforced?
   - On such a machine, unplug the dongle and plug it back in while the app runs: does the map come back by itself?
-  - Install it from the repository address on a real Home Assistant machine (the image is built by
-    `.github/workflows/build-app.yaml`; nobody has installed the app that way yet).
+  - Install it from the repository address on a real Home Assistant machine, `amd64` included (done on the
+    test bench only, `aarch64`).
   - An icon and a logo for the app card (`icon.png`, `logo.png` in the app folder).
 - Native TLS is not built: on a LAN the tool speaks plain HTTP. On a network you do not trust, put a
   TLS-terminating reverse proxy in front of a loopback bind, with a password and `--allowed-host` (see README).

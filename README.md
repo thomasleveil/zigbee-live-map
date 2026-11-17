@@ -131,7 +131,7 @@ Comment out the `image:` line of `homeassistant/zigbee_live_map/config.yaml`, th
 1. Raise `version` in `pyproject.toml` and in `homeassistant/zigbee_live_map/config.yaml` (a test keeps them equal), and add the version to the app's `CHANGELOG.md`.
 2. Push to `main`. Until the build ends, Home Assistant offers an update that it cannot download yet.
 
-Packages are private when the first run creates them. Home Assistant pulls `ghcr.io/thomasleveil/zigbee-live-map` without signing in, so that package has to be made public once, in its settings on GitHub.
+Home Assistant pulls `ghcr.io/thomasleveil/zigbee-live-map` without signing in, so that package has to be public. Here the packages were public as soon as the workflow of this public repository created them; if Home Assistant cannot download the image, the package's visibility, in its settings on GitHub, is the first thing to check. The very first publication failed at its last step (the registry answered 403 for a package it had just created) and passed when that job was run again.
 
 **Options**, on the app's *Configuration* tab:
 
@@ -187,7 +187,7 @@ While it is attached, a copy of the tool running directly on the Mac cannot use 
 - **The dongle on that Supervisor: tested.** With `usb: true` and nothing else, the app opened the CC2531 and showed live traffic. The Supervisor gave the app container `/dev` (read-only, which still lets a device be opened) and the device rules for character majors 189 and 180, no privilege and no capability. Unplugged while running, the app says so on the page and in its log, and lets go of the device.
 - **Plugging the dongle back in while the app runs: not proven on a Home Assistant machine.** On the bench the app found it again by itself only when the bench was helped: the devcontainer's `/dev` is a copy made when it is created, so a newly plugged device gets no node there until one is made by hand. A real machine's `/dev` follows the hardware; nobody has watched the app recover there. Restarting the app is the fallback.
 - **AppArmor: not tested.** The bench's kernel has none, so the app ran unconfined. What Home Assistant's default profile does to libusb on a machine that enforces it is unknown.
-- **Installing from the repository on a real Home Assistant: not tested.** The image, its two architectures and the workflow follow Home Assistant's documentation and example; nobody has yet added the repository to a Home Assistant machine and installed the app from it.
+- **Installing from the repository address: tested on the same bench.** The one-click link opened Home Assistant's dialog with the address filled in; the Supervisor cloned the repository, listed the app at version 0.1.0 with its documentation, downloaded the published image without building anything, and the app ran through ingress. The image also pulls without credentials for both architectures. Nobody has yet done it on a real Home Assistant machine.
 - **`amd64`: built and run under emulation only**, on an Apple-silicon Mac, where the image served the demo map through the stand-in proxy. `aarch64` is that machine's own architecture. Neither has run on a real `amd64` machine.
 
 ## Device names
