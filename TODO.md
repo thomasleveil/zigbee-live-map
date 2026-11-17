@@ -17,8 +17,9 @@ sniffing is one data source among several.
 ## LAN / Home Assistant deployment
 
 - The Home Assistant app is packaged (`homeassistant/`); what remains:
-  - Test it on a real Supervisor, with the CC2531 plugged in: does `usb: true` alone let pyusb open
-    `0451:16ae` (or is `udev: true`, a custom AppArmor profile or a privileged capability needed)?
+  - Test it on a Home Assistant machine that enforces AppArmor, with the CC2531 plugged in: `usb: true` alone
+    is enough on the test bench (no AppArmor there); is a custom AppArmor profile needed where it is enforced?
+  - On such a machine, unplug the dongle and plug it back in while the app runs: does the map come back by itself?
   - Install it from the repository address on a real Home Assistant machine (the image is built by
     `.github/workflows/build-app.yaml`; nobody has installed the app that way yet).
   - An icon and a logo for the app card (`icon.png`, `logo.png` in the app folder).

@@ -30,8 +30,11 @@ The port is **not published** by default. To open the page from a browser outsid
 
 ## Not verified
 
-- USB passthrough of the dongle on a real Home Assistant: the app asks for it with `usb: true` (see the sources below). Whether that alone lets the app open the CC2531 has not been tested on hardware, and neither has the effect of the default AppArmor profile on it. If the page says the dongle was not found, look at the app's **Log** tab.
-- A real Supervisor: the app was only run through a stand-in for its ingress proxy.
+The app was tested on Home Assistant's own test bench (the devcontainer of its testing guide, Supervisor 2026.11.0): installed, opened through Home Assistant, and reading a real CC2531 with `usb: true` alone. What that bench could not show:
+
+- AppArmor: the bench's kernel has none. What Home Assistant's default profile does to the dongle on a machine that enforces it is unknown. If the page says the dongle was not found, look at the app's **Log** tab: it has one line each time the dongle is read, lost or not found.
+- Plugging the dongle back in while the app runs: the app looks for it every two seconds, but nobody has watched it recover on a real Home Assistant machine. If the map does not come back, restart the app.
+- An `amd64` machine: the image for it was only run under emulation.
 
 ## Sources for the choices in this app
 

@@ -159,13 +159,19 @@
         <p id="needsCause" role="status"></p>
         <details id="needsMore">
           <summary data-i18n="needs.what"></summary>
-          <ol>
+          <ol id="needsDesktop">
             <li data-i18n="needs.dongle"></li>
             <li><span data-i18n="needs.libusb"></span> macOS <code>brew install libusb</code>, Debian / Ubuntu <code>sudo apt install libusb-1.0-0</code></li>
             <li data-i18n="needs.udev"></li>
           </ol>
+          <ol id="needsApp" hidden>
+            <li><span data-i18n="needs.dongle"></span> <span data-i18n="needs.app.separate"></span></li>
+            <li data-i18n="needs.app.plug"></li>
+            <li data-i18n="needs.app.log"></li>
+          </ol>
           <p data-i18n="needs.retry"></p>
-          <p><span data-i18n="needs.demo"></span> <code>zigbee-live-map --demo</code></p>
+          <p id="needsDemoDesktop"><span data-i18n="needs.demo"></span> <code>zigbee-live-map --demo</code></p>
+          <p id="needsDemoApp" hidden data-i18n="needs.app.demo"></p>
         </details>
       </section>
     </div>
@@ -218,7 +224,7 @@ const dirty = { devices: true, card: true, legend: true, security: true };
 const newFocus = () => ({ polls: 0, relayed: 0, rebroadcast: 0, beacon: null, joins: [] });
 function reset() {
   S = { pans: {}, hint: new Map(), nodes: new Map(), links: new Map(), pairs: new Map(), waiting: new Map(), lastHandover: null, sweptAt: 0, ghostsAt: 0, events: [], counts: {},
-        ieee2addr: new Map(), names: {}, vendors: {}, focusIeee: null, focusAddr: null, total: 0, recent: [], pan: null, mode: "live", channel: null, canTune: false, focus: newFocus(),
+        ieee2addr: new Map(), names: {}, vendors: {}, focusIeee: null, focusAddr: null, total: 0, recent: [], pan: null, mode: "live", channel: null, canTune: false, haApp: false, focus: newFocus(),
         security: { vulnerable: false, secureJoinSeen: false, keyKnown: false, keySource: null, key: null }, identities: {}, costs: {}, batteries: {},
         hue: { configured: false, devices: {} } };
   parts.length = 0; rings.length = 0;
@@ -659,8 +665,9 @@ function renderNeeds() {
   if (on && !needsOn) $("needsMore").open = S.nodes.size === 0;
   if (on !== needsOn) { needsOn = on; $("needs").hidden = !on; }
   if (!on) return;
-  const key = "needs.cause." + (sniffer.reason || "usb");
-  const cause = t(ZLM.has(key) ? key : "needs.cause.usb", { detail: sniffer.detail || "" });
+  const reason = sniffer.reason || "usb";
+  const appKey = "needs.app.cause." + reason, key = "needs.cause." + reason;   // the app has its own words where "this computer" would be wrong
+  const cause = t(S.haApp && ZLM.has(appKey) ? appKey : ZLM.has(key) ? key : "needs.cause.usb", { detail: sniffer.detail || "" });
   if (cause !== needsCause) $("needsCause").textContent = needsCause = cause;
 }
 
@@ -920,6 +927,8 @@ async function connect() {
     const d = JSON.parse(m.data);
     if (d.type === "hello") {
       reset(); sel = null; setNames(d.names, d.vendors || {}); S.mode = d.mode; S.channel = d.channel; S.canTune = !!d.can_tune;
+      S.haApp = !!d.ha_app;   // the Home Assistant app: the notice gives Home Assistant advice, not a desktop's
+      $("needsDesktop").hidden = $("needsDemoDesktop").hidden = S.haApp; $("needsApp").hidden = $("needsDemoApp").hidden = !S.haApp;
       S.focusIeee = (d.mode !== "demo" && prefs.get("focus", null)) || d.focus || null;
       if (d.security) S.security = d.security;
       S.identities = d.identities || {}; S.costs = d.linkCosts || {}; S.batteries = d.batteries || {};

@@ -51,6 +51,12 @@
   "needs.udev": "On Linux, a udev rule that gives your user access to the dongle (see Hardware in the README).",
   "needs.retry": "Nothing to restart: the tool looks for the dongle every two seconds, and the map starts as soon as it can read it.",
   "needs.demo": "No hardware yet? Look at the simulated network:",
+  "needs.app.cause.not_found": "No sniffer dongle is detected on the USB ports of the machine that runs Home Assistant.",
+  "needs.app.cause.libusb": "The libusb library is missing from this app, so no USB dongle can be read. Rebuild or reinstall the app.",
+  "needs.app.separate": "It has to be a second, separate dongle: the one a Zigbee integration (ZHA, Zigbee2MQTT) uses cannot be shared.",
+  "needs.app.plug": "Plug it into the machine that runs Home Assistant. If Home Assistant runs in a virtual machine, the USB device has to be passed through to that virtual machine.",
+  "needs.app.log": "The app's Log tab shows what the tool sees.",
+  "needs.app.demo": "No hardware yet? Turn on the Demo network option on the app's Configuration tab, then restart the app.",
 
   "hud.channel": "channel",
   "hud.frames": "frames",

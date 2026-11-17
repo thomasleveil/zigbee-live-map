@@ -63,6 +63,12 @@ STATIC_NAME = re.compile(r"^[a-z0-9_-]+\.(css|js)$")
 LOCALE_CODE = re.compile(r"^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})?$")
 PAGES = {"/": "index.html", "/devices": "devices.html"}   # what an unauthenticated visitor is sent to the login for
 FRAME_HEADERS = {"X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancestors 'none'"}
+# The log line for each reason a dongle cannot be read (SnifferError codes); any other code is a USB problem, told with its detail.
+DONGLE_REASONS = {
+    "not_found": "not found: no CC2531 with the TI sniffer firmware (USB id 0451:16ae) on the USB ports; looking again every two seconds",
+    "libusb": "cannot be read: the libusb library is missing",
+    "radio": "found, but its radio did not start: unplug it and plug it back in",
+}
 
 
 def _static(name: str) -> str:
@@ -91,6 +97,8 @@ class Hub:
         self.hue = hue if hue is not None else HueService(None)   # memory only, and silent until the user sets a bridge up
         self.hue.on_change = self.hue_changed
         self.status = {"type": "status", "sniffer": "starting", "detail": "", "reason": ""}
+        self._dongle_logged: tuple | None = None   # the dongle state last written to the log, and whether it was ever read (see log_dongle)
+        self._dongle_was_read = False
         self.events: deque = deque(maxlen=backlog)
         self.clients: set[web.WebSocketResponse] = set()
         self.classifier = Classifier()
@@ -218,7 +226,26 @@ class Hub:
     async def set_status(self, sniffer: str, detail: str = "", reason: str = "") -> None:
         """`reason` is the sniffer's own code for what is missing (see SnifferError), empty when nothing is."""
         self.status = {"type": "status", "sniffer": sniffer, "detail": detail, "reason": reason}
+        self.log_dongle(sniffer, detail, reason)
         await self.send_all(self.status)
+
+    def log_dongle(self, sniffer: str, detail: str, reason: str) -> None:
+        """One line on stdout (the app's Log tab) each time the dongle's state changes: reading on a channel, lost, not found, read
+        again. The tool retries every two seconds, so a state that repeats prints nothing. Nothing from the traffic is written."""
+        if sniffer not in ("ok", "absent"):   # starting, demo, replay: nothing about a dongle to say
+            return
+        state = (sniffer, self.info.get("channel") if sniffer == "ok" else reason)
+        if state == self._dongle_logged:
+            return
+        previous, self._dongle_logged = self._dongle_logged, state
+        if sniffer == "ok":
+            again = self._dongle_was_read and previous is not None and previous[0] == "absent"   # back after a loss, not a first read
+            self._dongle_was_read = True
+            print(f"dongle: reading {'again ' if again else ''}on channel {self.info.get('channel')}", flush=True)
+            return
+        why = DONGLE_REASONS.get(reason, "found, but it cannot be opened: {detail}").format(detail=detail)
+        lost = previous is not None and previous[0] == "ok"   # it was being read: say what broke the reading, in libusb's words
+        print(f"dongle: lost: {detail or why}" if lost else f"dongle: {why}", flush=True)
 
     async def names_changed(self) -> None:
         names = self.names()
@@ -835,12 +862,33 @@ def demo_store() -> DeviceStore:
     return store
 
 
+def startup_lines(access: Access, url: str, port: int, mode: str, channel: int | None) -> list[str]:
+    """What the tool prints once it listens. As the Home Assistant app (--ingress) these lines land in the app's Log tab, where
+    the URL of the container means nothing: they say how to open the page instead. Whether the port is published is not
+    something the tool can know, so they claim neither."""
+    what = f"{mode}{f', channel {channel}' if mode == 'live' else ''}"
+    if access.ingress:
+        return [f"zigbee-live-map {__version__}: running as a Home Assistant app ({what})",
+                "  open it from Home Assistant: Open Web UI on the app's page, or its sidebar entry",
+                f"  a direct connection to port {port} works only if that port is published in the app's Network section, "
+                "with a password and allowed host names set"]
+    lines = [f"zigbee-live-map {__version__}: {url}  ({what})"]
+    if not access.loopback:
+        lines.append(f"  reachable from your network on port {port}, as plain HTTP" + ("; password required" if access.password else ""))
+    elif access.password:
+        lines.append("  this computer only, but sign-in is required (a password is set)")
+    return lines
+
+
 async def serve(args, access: Access | None = None) -> None:
     access = access if access is not None else accessmod.from_args(args)
     mode = "demo" if args.demo else "replay" if args.replay else "live"
     data_dir = Path(args.data_dir).expanduser()
     store = demo_store() if mode == "demo" else DeviceStore(data_dir)
-    info = {"channel": args.channel if mode == "live" else None, "mode": mode, "focus": args.focus, "can_tune": mode == "live"}
+    # ha_app: started as the Home Assistant app (--ingress), whatever channel a given request arrives on. The page uses it to
+    # give advice that fits Home Assistant instead of a desktop computer.
+    info = {"channel": args.channel if mode == "live" else None, "mode": mode, "focus": args.focus, "can_tune": mode == "live",
+            "ha_app": access.ingress}
     hub = Hub(store, Registry(data_dir), info, args.backlog, keys=KeyStore(None if mode == "demo" else data_dir),
               hue=HueService(None if mode == "demo" else data_dir, allow_loopback=access.local))
     hub.hue.start()   # only reads a bridge the user set up in an earlier session; nothing at all otherwise
@@ -859,12 +907,8 @@ async def serve(args, access: Access | None = None) -> None:
     await web.TCPSite(runner, access.host, args.port).start()
     port = runner.addresses[0][1]   # what the system gave, when the port asked for was 0
     url = access.url(port)
-    print(f"zigbee-live-map {__version__}: {url}  ({mode}{f', channel {args.channel}' if mode == 'live' else ''})", flush=True)
-    if not access.loopback:
-        print(f"  reachable from your network on port {port}, as plain HTTP" + ("; password required" if access.password else "")
-              + ("; Home Assistant ingress accepted" if access.ingress else ""), flush=True)
-    elif access.password:
-        print("  this computer only, but sign-in is required (a password is set)", flush=True)
+    for line in startup_lines(access, url, port, mode, args.channel):
+        print(line, flush=True)
     if args.open:
         import webbrowser
 

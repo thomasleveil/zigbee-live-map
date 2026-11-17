@@ -345,3 +345,86 @@ def test_workflow_builds_from_the_app_folder_with_the_wheel_copied_in():
     wheel = workflow_step("Build the wheel and put it in the app folder")
     assert 'uv build --wheel --out-dir "$RUNNER_TEMP/wheel"' in wheel   # never straight into the app folder
     assert 'cp "$RUNNER_TEMP"/wheel/zigbee_live_map-*.whl "$APP_DIR/"' in wheel
+
+
+# ------------------------------------------------------------------------------------- the tool knows it is the app
+
+def _hello_of(access_settings, tmp_path, monkeypatch) -> dict:
+    """The hello the page would get from a server started with these access settings (nothing listens)."""
+    import asyncio
+    import types
+
+    from zigbee_live_map import server
+
+    seen = []
+
+    class Stop(Exception):
+        pass
+
+    def stop(hub, *_args, **_kwargs):
+        seen.append(hub)
+        raise Stop
+
+    monkeypatch.setattr(server, "build_app", stop)
+    args = types.SimpleNamespace(demo=True, replay=None, data_dir=str(tmp_path), channel=11, focus=None, backlog=100, speed=1.0,
+                                 pcap=None, port=0, open=False)
+    with pytest.raises(Stop):
+        asyncio.run(server.serve(args, access_settings))
+    return seen[0].hello()
+
+
+def test_the_server_says_it_is_the_app_only_when_started_with_ingress(tmp_path, monkeypatch):
+    assert _hello_of(access.Access(host="0.0.0.0", ingress=True), tmp_path, monkeypatch)["ha_app"] is True
+    # A published port with a password is still the app: the fact is how the process was started, not the request's channel.
+    assert _hello_of(access.Access(host="0.0.0.0", ingress=True, password="x"), tmp_path, monkeypatch)["ha_app"] is True
+    assert _hello_of(access.Access(), tmp_path, monkeypatch)["ha_app"] is False
+    assert _hello_of(access.Access(host="0.0.0.0", password="x"), tmp_path, monkeypatch)["ha_app"] is False
+
+
+def test_start_lines_outside_home_assistant_are_unchanged():
+    from zigbee_live_map.server import startup_lines
+
+    v = __version__
+    assert startup_lines(access.Access(), "http://127.0.0.1:8765/", 8765, "live", 20) == [f"zigbee-live-map {v}: http://127.0.0.1:8765/  (live, channel 20)"]
+    assert startup_lines(access.Access(password="x"), "http://127.0.0.1:8765/", 8765, "demo", 11) == [
+        f"zigbee-live-map {v}: http://127.0.0.1:8765/  (demo)", "  this computer only, but sign-in is required (a password is set)"]
+    assert startup_lines(access.Access(host="0.0.0.0", password="x"), "http://127.0.0.1:8765/", 8765, "live", 15) == [
+        f"zigbee-live-map {v}: http://127.0.0.1:8765/  (live, channel 15)", "  reachable from your network on port 8765, as plain HTTP; password required"]
+
+
+def test_start_lines_of_the_app_say_how_to_open_it_and_claim_nothing_about_the_port():
+    from zigbee_live_map.server import startup_lines
+
+    for settings in (access.Access(host="0.0.0.0", ingress=True), access.Access(host="0.0.0.0", ingress=True, password="x")):
+        lines = startup_lines(settings, "http://127.0.0.1:8099/", 8099, "live", 20)
+        text = "\n".join(lines)
+        assert lines[0] == f"zigbee-live-map {__version__}: running as a Home Assistant app (live, channel 20)"
+        assert "Open Web UI" in text and "only if that port is published in the app's Network section" in text
+        assert "127.0.0.1" not in text and "reachable" not in text   # the container's address means nothing in the Log tab
+
+
+def _element(html: str, element_id: str) -> str:
+    found = re.search(rf'<(\w+) id="{element_id}"[^>]*>(.*?)</\1>', html, re.S)
+    assert found, element_id
+    return found.group(2)
+
+
+def test_the_notice_gives_each_variant_only_its_own_advice():
+    """Desktop advice (libusb packages, udev, the --demo command) stays out of the app's notice, and Home Assistant advice out of the desktop's.
+    Which variant shows is decided by ha_app in the hello (index.html); the browser check is in the Supervisor test notes."""
+    import json
+
+    static = ROOT / "src" / "zigbee_live_map" / "static"
+    html = (static / "index.html").read_text(encoding="utf-8")
+    desktop = _element(html, "needsDesktop") + _element(html, "needsDemoDesktop")
+    app = _element(html, "needsApp") + _element(html, "needsDemoApp")
+    assert re.search(r'<ol id="needsApp" hidden>', html) and re.search(r'<p id="needsDemoApp" hidden', html)   # desktop until told otherwise
+    for word in ("brew", "apt", "needs.udev", "--demo", "needs.libusb"):
+        assert word in desktop and word not in app, word
+    assert "needs.app." not in desktop
+    for name in ("en.json", "fr.json"):
+        strings = json.loads((static / "locales" / name).read_text(encoding="utf-8"))
+        app_texts = " ".join(v for k, v in strings.items() if k.startswith("needs.app."))
+        for word in ("brew", "apt ", "udev", "--demo", "this computer", "cet ordinateur"):
+            assert word not in app_texts, (name, word)
+        assert "Home Assistant" in strings["needs.app.cause.not_found"] and "Home Assistant" in strings["needs.app.plug"]

@@ -71,12 +71,17 @@ def open_sniffer(channel: int):
 
 
 def close_sniffer(dev) -> None:
+    """Stop and power down a dongle that is still there, then release its handle in every case: a dongle that was unplugged
+    fails the transfers, and skipping the release would keep the gone device's node open until garbage collection."""
     try:
         dev.ctrl_transfer(0x40, REQ_SET_STOP, 0, 0)
         dev.ctrl_transfer(0x40, REQ_SET_POWER, 0, 0)
-        usb.util.dispose_resources(dev)
     except usb.core.USBError:
         pass  # dongle already unplugged
+    try:
+        usb.util.dispose_resources(dev)
+    except usb.core.USBError:
+        pass  # nothing left to release
 
 
 def read_chunk(dev, timeout_ms: int = 200) -> bytes:

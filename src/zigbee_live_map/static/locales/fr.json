@@ -51,6 +51,12 @@
   "needs.udev": "Sous Linux, une règle udev qui donne à ton utilisateur l'accès au dongle (voir Hardware dans le README).",
   "needs.retry": "Rien à relancer : l'outil cherche le dongle toutes les deux secondes, et la carte démarre dès qu'il peut le lire.",
   "needs.demo": "Pas encore de matériel ? Regarde le réseau simulé :",
+  "needs.app.cause.not_found": "Aucun dongle sniffer n'est détecté sur les ports USB de la machine qui fait tourner Home Assistant.",
+  "needs.app.cause.libusb": "La bibliothèque libusb manque dans cette application : aucun dongle USB ne peut être lu. Reconstruis ou réinstalle l'application.",
+  "needs.app.separate": "Il faut un second dongle, à part : celui qu'utilise une intégration Zigbee (ZHA, Zigbee2MQTT) ne peut pas être partagé.",
+  "needs.app.plug": "Branche-le sur la machine qui fait tourner Home Assistant. Si Home Assistant tourne dans une machine virtuelle, le périphérique USB doit être transmis à cette machine virtuelle.",
+  "needs.app.log": "L'onglet Journal de l'application montre ce que voit l'outil.",
+  "needs.app.demo": "Pas encore de matériel ? Active l'option « Demo network » dans l'onglet Configuration de l'application, puis redémarre l'application.",
 
   "hud.channel": "canal",
   "hud.frames": "trames",
