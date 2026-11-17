@@ -2,7 +2,7 @@
 # https://contributors.home-assistant.io/apps/reference/configuration/ (read 2026-11-16).
 name: "Zigbee Live Map"
 # Quoted, and equal to `version` in pyproject.toml (a test checks it).
-version: "0.1.0"
+version: "0.1.1"
 slug: "zigbee_live_map"
 description: "Live animated map of your Zigbee network, from a passive USB sniffer dongle"
 url: "https://github.com/thomasleveil/zigbee-live-map"

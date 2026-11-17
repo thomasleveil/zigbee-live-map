@@ -1,6 +1,6 @@
 [project]
 name = "zigbee-live-map"
-version = "0.1.0"
+version = "0.1.1"
 description = "Live animated map of a Zigbee network, from a passive 802.15.4 sniffer to your browser"
 readme = "README.md"
 requires-python = ">=3.10"
