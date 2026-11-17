@@ -210,12 +210,13 @@ def test_try_locally_plays_the_supervisor_with_a_dummy_token_on_purpose():
     assert access.SUPERVISOR_ENV == "SUPERVISOR_TOKEN"   # the name Home Assistant documents (contributors.home-assistant.io/apps/reference/environment/)
 
 
-@pytest.mark.parametrize("name", ["config.yaml", "Dockerfile", "start.sh", "DOCS.md", "translations/en.yaml", "../try-locally.sh"])
+@pytest.mark.parametrize("name", ["config.yaml", "Dockerfile", "start.sh", "DOCS.md", "README.md", "translations/en.yaml", "../try-locally.sh",
+                                  "../art/icon.svg", "../art/logo.svg"])
 def test_no_machine_path_or_private_value_in_the_app_files(name):
     text = (APP / name).read_text(encoding="utf-8")
     assert not re.search(r"/Users/|/home/\w|/private/", text)
     # The only personal name in these files is the public address of the repository and of its image.
-    public = re.sub(r"(github\.com|ghcr\.io)/thomasleveil/zigbee-live-map", "", text)
+    public = re.sub(r"(github\.com|ghcr\.io|raw\.githubusercontent\.com)/thomasleveil/zigbee-live-map", "", text)
     assert "thomasleveil" not in public.lower()
 
 
@@ -284,7 +285,7 @@ def workflow_step(name: str) -> str:
 
 
 def test_no_placeholder_address_is_left():
-    for path in (ROOT / "repository.yaml", APP / "config.yaml", ROOT / "README.md", APP / "DOCS.md", ROOT / "TODO.md"):
+    for path in (ROOT / "repository.yaml", APP / "config.yaml", ROOT / "README.md", APP / "DOCS.md", APP / "README.md", ROOT / "TODO.md"):
         text = path.read_text(encoding="utf-8")
         assert "OWNER" not in text and "PLACEHOLDER" not in text, path.name
     assert CONFIG["url"] == REPOSITORY == load_yaml(ROOT / "repository.yaml")["url"]
@@ -428,3 +429,50 @@ def test_the_notice_gives_each_variant_only_its_own_advice():
         for word in ("brew", "apt ", "udev", "--demo", "this computer", "cet ordinateur"):
             assert word not in app_texts, (name, word)
         assert "Home Assistant" in strings["needs.app.cause.not_found"] and "Home Assistant" in strings["needs.app.plug"]
+
+
+def png_chunks(path: Path) -> list[tuple[str, bytes]]:
+    """The chunks of a PNG file, in order: (type, data)."""
+    import struct
+
+    raw = path.read_bytes()
+    assert raw[:8] == b"\x89PNG\r\n\x1a\n", path.name
+    out, at = [], 8
+    while at < len(raw):
+        length, kind = struct.unpack(">I4s", raw[at:at + 8])
+        out.append((kind.decode("ascii"), raw[at + 8:at + 8 + length]))
+        at += 12 + length
+    return out
+
+
+@pytest.mark.parametrize("name", ["icon.png", "logo.png"])
+def test_the_store_pictures_have_the_documented_shape_and_carry_nothing_else(name):
+    """icon.png is square, logo.png is wide (contributors.home-assistant.io/apps/guides/presentation/); neither holds text, a date or camera data."""
+    import struct
+
+    chunks = png_chunks(APP / name)
+    width, height = struct.unpack(">II", chunks[0][1][:8])
+    if name == "icon.png":
+        assert width == height and width >= 128
+    else:
+        assert width >= 250 and 2 <= width / height <= 3
+    assert {kind for kind, _ in chunks} <= {"IHDR", "PLTE", "tRNS", "gAMA", "sRGB", "cHRM", "bKGD", "pHYs", "IDAT", "IEND"}
+
+
+def test_the_store_pictures_are_what_their_sources_draw():
+    """Each picture has its drawing next to the app; the drawing names the command that renders it, and holds no linked file."""
+    for name in ("icon", "logo"):
+        source = (APP.parent / "art" / f"{name}.svg").read_text(encoding="utf-8")
+        assert f"../zigbee_live_map/{name}.png" in source and "rsvg-convert" in source
+        assert "href" not in source and "<image" not in source   # nothing fetched or embedded: shapes and text only
+
+
+def test_the_store_page_shows_a_short_text_and_the_screenshot():
+    """The app's README.md is the text of its store page. The page gets it as text: a relative picture path would point into Home Assistant."""
+    text = (APP / "README.md").read_text(encoding="utf-8")
+    assert len(text.split()) < 160   # "Keep it short" (same guide); the options are on the Documentation tab
+    pictures = re.findall(r"!\[[^\]]+\]\(([^)\s]+)\)", text)   # every picture has a description
+    assert pictures == ["https://raw.githubusercontent.com/thomasleveil/zigbee-live-map/main/docs/screenshot.png"]
+    assert text.count("![") == 1 and (ROOT / "docs" / "screenshot.png").is_file()
+    assert "0451:16ae" in text and "Demo network" in text and "Documentation" in text
+

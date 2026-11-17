@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 100">
+  <!-- Source of ../zigbee_live_map/logo.png. Render: rsvg-convert -w 500 logo.svg | magick - -strip ../zigbee_live_map/logo.png
+       The text is drawn as Menlo Bold: render it on a machine that has that font. -->
+  <defs>
+    <radialGradient id="sky" cx="30%" cy="42%" r="90%">
+      <stop offset="0" stop-color="#16265a"/>
+      <stop offset="1" stop-color="#04060e"/>
+    </radialGradient>
+    <radialGradient id="coordinator" cx="42%" cy="38%" r="65%">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#7fb2ff"/>
+    </radialGradient>
+    <radialGradient id="router" cx="42%" cy="38%" r="65%">
+      <stop offset="0" stop-color="#d9fffb"/>
+      <stop offset="1" stop-color="#2fc4c4"/>
+    </radialGradient>
+    <radialGradient id="device" cx="42%" cy="38%" r="65%">
+      <stop offset="0" stop-color="#f1eaff"/>
+      <stop offset="1" stop-color="#a98bff"/>
+    </radialGradient>
+  </defs>
+  <rect x="1.5" y="1.5" width="247" height="97" rx="18" fill="url(#sky)" stroke="#6278bd" stroke-width="1.5"/>
+  <g transform="translate(8 9) scale(.64)">
+    <g fill="none" stroke-linecap="round">
+      <circle cx="36" cy="94" r="17" stroke="#7fb2ff" stroke-width="2" opacity=".55"/>
+      <circle cx="36" cy="94" r="24" stroke="#7fb2ff" stroke-width="1.5" opacity=".25"/>
+      <path d="M68 58 31 33M68 58 100 36M68 58 36 94" stroke="#6f9cf0" stroke-width="4"/>
+      <path d="M31 33 36 94" stroke="#6f9cf0" stroke-width="2" opacity=".6"/>
+      <path d="M68 58 98 96M100 36 110 68" stroke="#a9b6d9" stroke-width="2" stroke-dasharray="3 5"/>
+      <circle cx="68" cy="58" r="18" stroke="#cfe0ff" stroke-width="1.5" stroke-dasharray="3 4"/>
+    </g>
+    <circle cx="55.5" cy="72" r="3.2" fill="#ffffff"/>
+    <circle cx="47.5" cy="81" r="2.4" fill="#ffffff" opacity=".8"/>
+    <circle cx="68" cy="58" r="12" fill="url(#coordinator)"/>
+    <circle cx="31" cy="33" r="9" fill="url(#router)"/>
+    <circle cx="100" cy="36" r="9" fill="url(#router)"/>
+    <circle cx="36" cy="94" r="9" fill="url(#router)"/>
+    <circle cx="98" cy="96" r="5.5" fill="url(#device)"/>
+    <circle cx="110" cy="68" r="5.5" fill="url(#device)"/>
+  </g>
+  <g font-family="Menlo, monospace" font-weight="bold" font-size="20" letter-spacing="3">
+    <text x="98" y="44" fill="#e9eeff">ZIGBEE <tspan fill="#7fb2ff">//</tspan></text>
+    <text x="98" y="73" fill="#e9eeff">LIVE MAP</text>
+  </g>
+</svg>

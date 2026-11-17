@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Source of ../zigbee_live_map/icon.png. Render: rsvg-convert -w 256 icon.svg | magick - -strip ../zigbee_live_map/icon.png
+       Its own opaque tile, so that it reads on Home Assistant's light and dark cards alike. -->
+  <defs>
+    <radialGradient id="sky" cx="50%" cy="42%" r="75%">
+      <stop offset="0" stop-color="#16265a"/>
+      <stop offset="1" stop-color="#04060e"/>
+    </radialGradient>
+    <radialGradient id="coordinator" cx="42%" cy="38%" r="65%">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#7fb2ff"/>
+    </radialGradient>
+    <radialGradient id="router" cx="42%" cy="38%" r="65%">
+      <stop offset="0" stop-color="#d9fffb"/>
+      <stop offset="1" stop-color="#2fc4c4"/>
+    </radialGradient>
+    <radialGradient id="device" cx="42%" cy="38%" r="65%">
+      <stop offset="0" stop-color="#f1eaff"/>
+      <stop offset="1" stop-color="#a98bff"/>
+    </radialGradient>
+  </defs>
+  <rect x="2" y="2" width="124" height="124" rx="27" fill="url(#sky)" stroke="#6278bd" stroke-width="2"/>
+  <g fill="none" stroke-linecap="round">
+    <circle cx="36" cy="94" r="17" stroke="#7fb2ff" stroke-width="2" opacity=".55"/>
+    <circle cx="36" cy="94" r="24" stroke="#7fb2ff" stroke-width="1.5" opacity=".25"/>
+    <path d="M68 58 31 33M68 58 100 36M68 58 36 94" stroke="#6f9cf0" stroke-width="4"/>
+    <path d="M31 33 36 94" stroke="#6f9cf0" stroke-width="2" opacity=".6"/>
+    <path d="M68 58 98 96M100 36 110 68" stroke="#a9b6d9" stroke-width="2" stroke-dasharray="3 5"/>
+    <circle cx="68" cy="58" r="18" stroke="#cfe0ff" stroke-width="1.5" stroke-dasharray="3 4"/>
+  </g>
+  <circle cx="55.5" cy="72" r="3.2" fill="#ffffff"/>
+  <circle cx="47.5" cy="81" r="2.4" fill="#ffffff" opacity=".8"/>
+  <circle cx="68" cy="58" r="12" fill="url(#coordinator)"/>
+  <circle cx="31" cy="33" r="9" fill="url(#router)"/>
+  <circle cx="100" cy="36" r="9" fill="url(#router)"/>
+  <circle cx="36" cy="94" r="9" fill="url(#router)"/>
+  <circle cx="98" cy="96" r="5.5" fill="url(#device)"/>
+  <circle cx="110" cy="68" r="5.5" fill="url(#device)"/>
+</svg>
