@@ -1,0 +1,156 @@
+# Builds the Home Assistant app image for every architecture in the app's config.yaml and publishes it to the
+# GitHub Container Registry as one multi-arch image, which is what `image` in config.yaml points at.
+#
+# Adapted from Home Assistant's own example (https://github.com/home-assistant/apps-example, build-app.yaml) and
+# built on its builder actions (https://github.com/home-assistant/builder), pinned to a release as
+# https://contributors.home-assistant.io/apps/guides/publishing/ asks.
+#
+# What gets published, and when:
+#   - the tag is `version` in config.yaml, and nothing else decides it;
+#   - a tag that already exists is never pushed again (skip-existing): a push to main that does not change the
+#     version still builds both images, as a check, and publishes nothing;
+#   - so a new version reaches people by raising `version` (pyproject.toml and config.yaml, a test keeps them equal);
+#   - a pull request builds and never publishes, and neither does a run started by hand on another branch.
+name: Build the Home Assistant app
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  APP_DIR: homeassistant/zigbee_live_map
+
+permissions:
+  contents: read
+
+# Two runs for the same branch never publish at the same time.
+concurrency:
+  group: build-app-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Read the app manifest
+    runs-on: ubuntu-latest
+    outputs:
+      architectures: ${{ steps.app.outputs.architectures }}
+      build_matrix: ${{ steps.matrix.outputs.matrix }}
+      description: ${{ steps.app.outputs.description }}
+      image_name: ${{ steps.app.outputs.image_name }}
+      name: ${{ steps.app.outputs.name }}
+      registry_prefix: ${{ steps.app.outputs.registry_prefix }}
+      url: ${{ steps.app.outputs.url }}
+      version: ${{ steps.app.outputs.version }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      # config.yaml is the single source: one `key: "value"` per line for these keys (tests/test_homeassistant_app.py
+      # keeps it that way), so sed is enough and no YAML tool has to be installed.
+      - name: Read config.yaml
+        id: app
+        run: |
+          config="$APP_DIR/config.yaml"
+          value() { sed -n "s/^$1: *\"\(.*\)\" *\$/\1/p" "$config"; }
+          version=$(value version)
+          image=$(value image)
+          name=$(value name)
+          description=$(value description)
+          url=$(value url)
+          architectures=$(awk '/^arch:/ {inside = 1; next} inside && /^  - / {print $2; next} inside && /^[^ #]/ {exit}' "$config" | jq -Rnc '[inputs]')
+          for required in version image name description url; do
+            [ -n "${!required}" ] || { echo "::error::no $required in $config"; exit 1; }
+          done
+          [ "$architectures" != "[]" ] || { echo "::error::no arch in $config"; exit 1; }
+          {
+            echo "version=$version"
+            echo "image_name=${image##*/}"
+            echo "registry_prefix=${image%/*}"
+            echo "name=$name"
+            echo "description=$description"
+            echo "url=$url"
+            echo "architectures=$architectures"
+          } >> "$GITHUB_OUTPUT"
+          echo "$image:$version for $architectures"
+
+      - name: Prepare the build matrix
+        id: matrix
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.09.0
+        with:
+          architectures: ${{ steps.app.outputs.architectures }}
+          image-name: ${{ steps.app.outputs.image_name }}
+          registry-prefix: ${{ steps.app.outputs.registry_prefix }}
+
+  build:
+    name: Build the ${{ matrix.arch }} image
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read   # check out the code
+      id-token: write   # Cosign signing
+      packages: write   # push to the GitHub Container Registry
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.build_matrix) }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+
+      # The build context is the app folder alone, as on a Home Assistant machine, so the tool arrives in it as a wheel.
+      # Built elsewhere, then copied: uv writes a .gitignore that ignores everything into its output folder.
+      - name: Build the wheel and put it in the app folder
+        run: |
+          uv build --wheel --out-dir "$RUNNER_TEMP/wheel"
+          cp "$RUNNER_TEMP"/wheel/zigbee_live_map-*.whl "$APP_DIR/"
+
+      - name: Build the image
+        uses: home-assistant/builder/actions/build-image@2026.09.0
+        with:
+          arch: ${{ matrix.arch }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          context: "./${{ env.APP_DIR }}"
+          image: ${{ matrix.image }}
+          image-tags: |
+            ${{ needs.prepare.outputs.version }}
+            latest
+          labels: |
+            io.hass.type=app
+            io.hass.name=${{ needs.prepare.outputs.name }}
+            io.hass.description=${{ needs.prepare.outputs.description }}
+            io.hass.url=${{ needs.prepare.outputs.url }}
+          push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+          skip-existing: ${{ needs.prepare.outputs.version }}
+          version: ${{ needs.prepare.outputs.version }}
+
+  manifest:
+    name: Publish the multi-arch image
+    needs: [prepare, build]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # Cosign signing
+      packages: write   # push to the GitHub Container Registry
+    steps:
+      - name: Publish the multi-arch manifest
+        uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.09.0
+        with:
+          architectures: ${{ needs.prepare.outputs.architectures }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          image-name: ${{ needs.prepare.outputs.image_name }}
+          image-tags: |
+            ${{ needs.prepare.outputs.version }}
+            latest
+          registry-prefix: ${{ needs.prepare.outputs.registry_prefix }}
+          skip-existing: ${{ needs.prepare.outputs.version }}

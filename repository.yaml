@@ -1,6 +1,5 @@
 # Makes this Git repository addable as a Home Assistant app repository.
 # Format: https://contributors.home-assistant.io/apps/guides/repository/
 name: "Zigbee Live Map"
-# PLACEHOLDER: replace with the real address of the repository once it is public.
-url: "https://github.com/OWNER/zigbee-live-map"
+url: "https://github.com/thomasleveil/zigbee-live-map"
 maintainer: "Thomas Leveil"

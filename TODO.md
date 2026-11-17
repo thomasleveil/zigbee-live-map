@@ -19,9 +19,9 @@ sniffing is one data source among several.
 - The Home Assistant app is packaged (`homeassistant/`); what remains:
   - Test it on a real Supervisor, with the CC2531 plugged in: does `usb: true` alone let pyusb open
     `0451:16ae` (or is `udev: true`, a custom AppArmor profile or a privileged capability needed)?
-  - Publish a prebuilt multi-arch image (aarch64, amd64) once the repository is public, and set `image`
-    in `config.yaml`: the wheel then no longer has to be built by hand, and the app installs from the repository URL.
-  - Replace the placeholder repository address in `repository.yaml` and `config.yaml`.
+  - Install it from the repository address on a real Home Assistant machine (the image is built by
+    `.github/workflows/build-app.yaml`; nobody has installed the app that way yet).
+  - An icon and a logo for the app card (`icon.png`, `logo.png` in the app folder).
 - Native TLS is not built: on a LAN the tool speaks plain HTTP. On a network you do not trust, put a
   TLS-terminating reverse proxy in front of a loopback bind, with a password and `--allowed-host` (see README).
 

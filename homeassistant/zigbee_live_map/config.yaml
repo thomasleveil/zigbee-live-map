@@ -5,8 +5,11 @@ name: "Zigbee Live Map"
 version: "0.1.0"
 slug: "zigbee_live_map"
 description: "Live animated map of your Zigbee network, from a passive USB sniffer dongle"
-# PLACEHOLDER: replace with the real repository address once it is public.
-url: "https://github.com/OWNER/zigbee-live-map"
+url: "https://github.com/thomasleveil/zigbee-live-map"
+# The published multi-arch image, without a tag: the Supervisor pulls the tag equal to `version`
+# (https://contributors.home-assistant.io/apps/guides/publishing/). .github/workflows/build-app.yaml builds and pushes it.
+# To build the app on the Home Assistant machine instead (the local_apps folder), comment this line out.
+image: "ghcr.io/thomasleveil/zigbee-live-map"
 # The two architectures the docs list as current. Both bases below are multi-arch.
 arch:
   - aarch64

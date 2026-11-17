@@ -95,9 +95,10 @@ def test_version_matches_the_package():
     assert CONFIG["version"] == declared == __version__
 
 
-def test_runs_under_the_base_images_init_and_builds_locally():
+def test_runs_under_the_base_images_init_and_pulls_the_published_image():
     assert CONFIG["init"] is False   # S6 overlay must be process 1 (an `init: true` stops the container at once)
-    assert "image" not in CONFIG   # with an image key the Supervisor pulls it instead of building the folder
+    # With an image key the Supervisor pulls it instead of building the folder: the multi-arch name, no tag, no {arch}.
+    assert CONFIG["image"] == "ghcr.io/thomasleveil/zigbee-live-map"
     assert CONFIG["usb"] is True   # raw /dev/bus/usb: libusb is not a serial port
 
 
@@ -177,7 +178,8 @@ def test_the_wheel_and_the_local_test_directory_are_ignored_by_git():
 def test_repository_file_names_the_repository():
     text = (ROOT / "repository.yaml").read_text(encoding="utf-8")
     repo = load_yaml(ROOT / "repository.yaml")
-    assert repo["name"] and "PLACEHOLDER" in text
+    assert repo["name"] and "PLACEHOLDER" not in text
+    assert repo["url"] == CONFIG["url"]   # the address people add in Home Assistant is the one the app card links to
     assert repo["maintainer"] == "Thomas Leveil"   # what LICENSE already states, and nothing more
     assert "Thomas Leveil" in (ROOT / "LICENSE").read_text(encoding="utf-8")
 
@@ -212,7 +214,9 @@ def test_try_locally_plays_the_supervisor_with_a_dummy_token_on_purpose():
 def test_no_machine_path_or_private_value_in_the_app_files(name):
     text = (APP / name).read_text(encoding="utf-8")
     assert not re.search(r"/Users/|/home/\w|/private/", text)
-    assert "thomasleveil" not in text.lower()
+    # The only personal name in these files is the public address of the repository and of its image.
+    public = re.sub(r"(github\.com|ghcr\.io)/thomasleveil/zigbee-live-map", "", text)
+    assert "thomasleveil" not in public.lower()
 
 
 def test_the_wheel_is_never_built_straight_into_the_app_folder():
@@ -262,3 +266,82 @@ def test_try_locally_stand_in_proxy_answers_only_its_own_host_names():
     assert line in script, "the proxy checks Host"
     comment = script[:script.index(line)].rsplit("\n\n", 1)[-1]
     assert "DNS rebinding" in comment and "Host" in comment
+
+
+# ---- publishing: the image the Supervisor pulls, and the workflow that builds it ------------------------
+
+REPOSITORY = "https://github.com/thomasleveil/zigbee-live-map"
+IMAGE = "ghcr.io/thomasleveil/zigbee-live-map"
+WORKFLOW = (ROOT / ".github" / "workflows" / "build-app.yaml").read_text(encoding="utf-8")
+
+
+def workflow_step(name: str) -> str:
+    """The text of one step of the workflow, from its `- name:` line to the next step or job."""
+    start = WORKFLOW.index(f"- name: {name}\n")
+    rest = WORKFLOW[start + 1:]
+    end = re.search(r"\n\s*- name: |\n  \w[\w-]*:\n", rest)
+    return WORKFLOW[start:start + 1 + (end.start() if end else len(rest))]
+
+
+def test_no_placeholder_address_is_left():
+    for path in (ROOT / "repository.yaml", APP / "config.yaml", ROOT / "README.md", APP / "DOCS.md", ROOT / "TODO.md"):
+        text = path.read_text(encoding="utf-8")
+        assert "OWNER" not in text and "PLACEHOLDER" not in text, path.name
+    assert CONFIG["url"] == REPOSITORY == load_yaml(ROOT / "repository.yaml")["url"]
+
+
+def test_readme_installs_by_adding_the_repository():
+    from urllib.parse import quote
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    link = "https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=" + quote(REPOSITORY, safe="")
+    assert link in readme   # the one-click link, with the address URL-encoded
+    assert f"`{REPOSITORY}`" in readme   # and the address to paste by hand
+
+
+def test_workflow_reads_the_manifest_the_way_it_is_written(tmp_path):
+    """The step's own shell, run on the real config.yaml: what it hands the build is what config.yaml says."""
+    step = workflow_step("Read config.yaml")
+    body = step[step.index("run: |\n") + len("run: |\n"):]
+    indent = len(body) - len(body.lstrip(" "))
+    script = "\n".join(line[indent:] for line in body.splitlines())
+    out = tmp_path / "out"
+    env = {"PATH": os.environ["PATH"], "APP_DIR": "homeassistant/zigbee_live_map", "GITHUB_OUTPUT": str(out)}
+    subprocess.run(["bash", "-e", "-c", script], check=True, capture_output=True, cwd=ROOT, env=env)
+    got = dict(line.split("=", 1) for line in out.read_text(encoding="utf-8").splitlines())
+    import json
+
+    assert got["version"] == CONFIG["version"]
+    assert got["registry_prefix"] + "/" + got["image_name"] == CONFIG["image"]
+    assert json.loads(got["architectures"]) == CONFIG["arch"]
+    assert (got["name"], got["description"], got["url"]) == (CONFIG["name"], CONFIG["description"], CONFIG["url"])
+
+
+def test_workflow_pins_every_action_to_a_release():
+    used = re.findall(r"uses: (\S+)@(\S+)", WORKFLOW)
+    assert len(used) >= 6
+    for action, ref in used:
+        assert re.fullmatch(r"v?\d+(\.\d+)+", ref), f"{action}@{ref} is not a release"
+    builder = {ref for action, ref in used if action.startswith("home-assistant/builder/actions/")}
+    assert len(builder) == 1, "the three builder actions come from one release"
+
+
+def test_workflow_never_pushes_a_tag_twice_and_never_publishes_a_pull_request():
+    build, manifest = workflow_step("Build the image"), workflow_step("Publish the multi-arch manifest")
+    version = "${{ needs.prepare.outputs.version }}"
+    for step in (build, manifest):
+        assert f"skip-existing: {version}" in step
+        tags = step[step.index("image-tags: |"):].splitlines()[1:3]
+        assert [t.strip() for t in tags] == [version, "latest"]   # the first tag is the one the manifest looks the images up by
+    only_main = "github.event_name != 'pull_request' && github.ref == 'refs/heads/main'"   # a run started by hand on another branch publishes nothing
+    assert f"push: ${{{{ {only_main} }}}}" in build
+    assert re.search(r"manifest:\n(?:.*\n)*?\s+if: " + re.escape(only_main) + r"\n", WORKFLOW)
+    assert re.search(r"^permissions:\n  contents: read\n", WORKFLOW, re.M)   # write rights only on the two jobs that publish
+
+
+def test_workflow_builds_from_the_app_folder_with_the_wheel_copied_in():
+    assert re.search(r"^  APP_DIR: homeassistant/zigbee_live_map$", WORKFLOW, re.M)
+    assert 'context: "./${{ env.APP_DIR }}"' in workflow_step("Build the image")
+    wheel = workflow_step("Build the wheel and put it in the app folder")
+    assert 'uv build --wheel --out-dir "$RUNNER_TEMP/wheel"' in wheel   # never straight into the app folder
+    assert 'cp "$RUNNER_TEMP"/wheel/zigbee_live_map-*.whl "$APP_DIR/"' in wheel

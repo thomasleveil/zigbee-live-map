@@ -105,14 +105,33 @@ The tool is packaged as a Home Assistant **app** (what used to be called an add-
 - the dongle passed to the app, and your lists of known devices and saved keys kept in the app's own data, included in Home Assistant backups;
 - a demo switch, to look at the app before you have a dongle.
 
-**Install it today.** The app is built on your Home Assistant machine from its folder, and the Supervisor uses that folder as the whole build context, so the tool has to arrive in it as a wheel. From a clone of this repository:
+**Install it.** Add this repository to your Home Assistant, then install the app from it:
+
+[![Open your Home Assistant instance and show the add app repository dialog with a specific repository URL pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fthomasleveil%2Fzigbee-live-map)
+
+The button opens your Home Assistant with the address filled in. By hand, it is three steps:
+
+1. Open *Settings*, *Apps*, and select *Install app*.
+2. In the top-right menu, select *Repositories*, paste `https://github.com/thomasleveil/zigbee-live-map` and select *Add*.
+3. Select *Zigbee Live Map* in the list and install it.
+
+Then set your Zigbee channel on the app's *Configuration* tab (or turn the demo on), start the app, and use *Open Web UI*. Home Assistant downloads a ready-made image, `ghcr.io/thomasleveil/zigbee-live-map`, for `amd64` and `aarch64` machines: nothing is built on yours.
+
+**Build it on your Home Assistant machine instead**, to try a change before it is published. The Supervisor builds an app from its folder alone, so the tool has to arrive in it as a wheel, and `image` has to go, or the published image is pulled instead. From a clone of this repository:
 
 ```sh
 uv build --wheel --out-dir dist/
 cp dist/zigbee_live_map-*.whl homeassistant/zigbee_live_map/
 ```
 
-Copy the folder `homeassistant/zigbee_live_map` (with the wheel inside) into the `local_apps` folder of your Home Assistant, with the Samba share or the *Terminal & SSH* app. Then open *Settings*, *Apps*, *Install app*, run *Check for updates*, and install *Zigbee Live Map* from the *Local apps* section. After a change, use *Rebuild* on the app page, or `ha apps rebuild --force local_zigbee_live_map`. [`repository.yaml`](repository.yaml) is there so that the repository can later be added as an app repository by its URL; it holds a placeholder address until the repository is public.
+Comment out the `image:` line of `homeassistant/zigbee_live_map/config.yaml`, then copy the folder `homeassistant/zigbee_live_map` (with the wheel inside) into the `local_apps` folder of your Home Assistant, with the Samba share or the *Terminal & SSH* app. Open *Settings*, *Apps*, *Install app*, run *Check for updates*, and install *Zigbee Live Map* from the *Local apps* section. After a change, use *Rebuild* on the app page, or `ha apps rebuild --force local_zigbee_live_map`.
+
+**How a version gets published.** [`.github/workflows/build-app.yaml`](.github/workflows/build-app.yaml) builds the image for both architectures on every push to `main`, with Home Assistant's [builder actions](https://github.com/home-assistant/builder), and publishes it under the tag equal to `version` in `config.yaml`. A tag that exists is never pushed again, so a change reaches people only when the version is raised:
+
+1. Raise `version` in `pyproject.toml` and in `homeassistant/zigbee_live_map/config.yaml` (a test keeps them equal), and add the version to the app's `CHANGELOG.md`.
+2. Push to `main`. Until the build ends, Home Assistant offers an update that it cannot download yet.
+
+Packages are private when the first run creates them. Home Assistant pulls `ghcr.io/thomasleveil/zigbee-live-map` without signing in, so that package has to be made public once, in its settings on GitHub.
 
 **Options**, on the app's *Configuration* tab:
 
@@ -165,7 +184,8 @@ While it is attached, a copy of the tool running directly on the Mac cannot use 
 
 - **The dongle from inside the container: tested on one set-up**, OrbStack 2.2.5 on an Apple-silicon Mac, with the commands above. The app opened the CC2531 (`0451:16ae`), showed live traffic through the stand-in proxy, and found the dongle again by itself after it was detached and re-attached while the container kept running. Docker on a Linux computer and Docker Desktop have not been tried.
 - **A real Supervisor: not tested.** The script stands in for its proxy; it does not check a Home Assistant session and does not apply AppArmor. That `usb: true` gives the app the two things used above is read from the Supervisor's source, not observed on a Home Assistant machine, and what the default AppArmor profile does to libusb is unknown.
-- Only the architecture of the machine that built it has been built: `aarch64`. `amd64` is declared, from the documentation, and untested.
+- **Installing from the repository on a real Home Assistant: not tested.** The image, its two architectures and the workflow follow Home Assistant's documentation and example; nobody has yet added the repository to a Home Assistant machine and installed the app from it.
+- **`amd64`: built and run under emulation only**, on an Apple-silicon Mac, where the image served the demo map through the stand-in proxy. `aarch64` is that machine's own architecture. Neither has run on a real `amd64` machine.
 
 ## Device names
 
