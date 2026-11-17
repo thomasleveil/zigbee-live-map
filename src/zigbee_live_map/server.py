@@ -112,6 +112,8 @@ class Hub:
         self.key_source: str | None = None       # "recovered" (from a default-key join) or "entered"
         self.vulnerable = False                   # a join was secured with the default link key
         self.secure_join_seen = False             # a join was secured with a non-default link key
+        self.touchlink_recovered = False          # the network key was recovered from a Touchlink (ZLL) join
+        self._zll_response_ids: dict[int, int] = {}  # Touchlink transaction id -> response id, awaiting its join
         self.identities: dict[str, dict] = {}     # NWK short address -> {manufacturer, model, power}
         self.link_quality: dict[str, list] = {}   # router NWK short address -> per-neighbour costs
         self.batteries: dict[str, dict] = {}      # NWK short address -> {percent} or {volts}
@@ -142,6 +144,7 @@ class Hub:
 
     def security_state(self) -> dict:
         return {"vulnerable": self.vulnerable, "secureJoinSeen": self.secure_join_seen,
+                "touchlinkRecovered": self.touchlink_recovered,
                 "keyKnown": self.network_key is not None, "keySource": self.key_source,
                 "key": self.network_key.hex() if self.network_key else None, "pan": self.pan}
 
@@ -189,8 +192,9 @@ class Hub:
         await self._inspect(frame, event)
         await self.send_all({"type": "ev", "e": event})
 
-    async def _inspect(self, frame: bytes, event: dict) -> None:
-        """Read what the encrypted layers give up: the vulnerability test, device identity, link costs."""
+    async def _check_security(self, frame: bytes) -> None:
+        """Try every way one frame reveals the network key or a join vulnerability: the APS default-link-key
+        test, and the Touchlink (ZLL) key transport recovered with the leaked ZLL master key."""
         if not self.vulnerable:
             recovered = decode.recover_network_key(frame)   # default link key only: that is the test
             if recovered is not None:
@@ -198,9 +202,40 @@ class Hub:
                 if self.network_key is None:
                     self.network_key, self.key_source = recovered, "recovered"
                 await self.send_security()
-            elif not self.secure_join_seen and decode.transport_key_envelope(frame) is not None:
+                return
+            if not self.secure_join_seen and decode.transport_key_envelope(frame) is not None:
                 self.secure_join_seen = True   # a join, but secured with a key that is not the default one
                 await self.send_security()
+                return
+        if self.network_key is None:   # Touchlink: hold each scan response's id, recover a join's network key
+            scan = decode.touchlink_scan_response(frame)
+            if scan is not None:
+                self._remember_zll_response(*scan)
+                return
+            recovered = self._recover_touchlink(frame)
+            if recovered is not None:
+                self.network_key, self.key_source, self.touchlink_recovered = recovered, "touchlink", True
+                await self.send_security()
+
+    def _remember_zll_response(self, transaction_id: int, response_id: int) -> None:
+        """Hold a Touchlink scan response's id until the join that needs it; bounded against noise."""
+        self._zll_response_ids[transaction_id] = response_id
+        while len(self._zll_response_ids) > 128:
+            self._zll_response_ids.pop(next(iter(self._zll_response_ids)))
+
+    def _recover_touchlink(self, frame: bytes) -> bytes | None:
+        """Recover the network key a Touchlink join transports, if its scan response was seen first."""
+        kt = decode.touchlink_key_transport(frame)
+        if kt is None:
+            return None
+        response_id = self._zll_response_ids.get(kt["transaction_id"])
+        if response_id is None:
+            return None
+        return crypto.zll_decrypt_network_key(kt["key_index"], kt["transaction_id"], response_id, kt["encrypted_key"])
+
+    async def _inspect(self, frame: bytes, event: dict) -> None:
+        """Read what the encrypted layers give up: the vulnerability test, device identity, link costs."""
+        await self._check_security(frame)
         key = self.network_key
         if key is None:
             return

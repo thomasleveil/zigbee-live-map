@@ -157,6 +157,35 @@ def test_a_default_key_join_is_flagged_and_the_key_is_recovered(tmp_path):
     run(scenario, tmp_path)
 
 
+def test_a_touchlink_join_recovers_the_network_key_after_its_scan_response(tmp_path):
+    async def scenario(client, hub, origin):
+        tid, rid = 0x12345678, 0x9ABCDEF0
+        scan = decode.build_touchlink_scan_response(seq=1, pan=0x1A62, mac_dst=0x0000, mac_src=0x3344,
+                                                    transaction_id=tid, response_id=rid)
+        join = decode.build_touchlink_network_join(crypto.ZLL_KEY_INDEX_MASTER, seq=2, pan=0x1A62,
+                                                   mac_dst=0x3344, mac_src=0x0000, transaction_id=tid,
+                                                   response_id=rid, network_key=NET)
+        await hub.publish(scan, 1.0, None)
+        assert hub.network_key is None   # the scan response alone is not enough
+        await hub.publish(join, 2.0, None)
+        assert hub.network_key == NET and hub.key_source == "touchlink"
+        assert hub.touchlink_recovered is True and hub.vulnerable is False   # distinct from the default-link-key verdict
+        assert hub.security_state()["touchlinkRecovered"] is True
+
+    run(scenario, tmp_path)
+
+
+def test_a_touchlink_join_without_its_scan_response_recovers_nothing(tmp_path):
+    async def scenario(client, hub, origin):
+        join = decode.build_touchlink_network_join(crypto.ZLL_KEY_INDEX_MASTER, seq=2, pan=0x1A62,
+                                                   mac_dst=0x3344, mac_src=0x0000, transaction_id=0x1111,
+                                                   response_id=0x2222, network_key=NET)
+        await hub.publish(join, 1.0, None)
+        assert hub.network_key is None and hub.touchlink_recovered is False
+
+    run(scenario, tmp_path)
+
+
 def test_a_non_default_join_is_seen_but_not_flagged(tmp_path):
     async def scenario(client, hub, origin):
         unique = bytes.fromhex("0102030405060708090a0b0c0d0e0f10")

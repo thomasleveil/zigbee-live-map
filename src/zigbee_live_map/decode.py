@@ -143,6 +143,110 @@ def recover_network_key(frame: bytes, link_key: bytes = crypto.DEFAULT_TC_LINK_K
     return plain[2:18]
 
 
+# --- Touchlink (ZLL) commissioning: recover the network key from an inter-PAN join ----------
+#
+# A separate join mechanism from the APS Transport-Key path above. Touchlink frames are inter-PAN:
+# a stub NWK header (frame control only) and a stub APS header (frame control, optional group id,
+# cluster id, profile id), then a ZCL command on the Touchlink commissioning cluster (0x1000). The
+# network key travels in a Network Start / Network Join request, encrypted under a key the ZLL master
+# key recovers (crypto.zll_decrypt_network_key). The response identifier needed for that recovery
+# arrives earlier, in the Scan Response of the same transaction, so the two are parsed separately and
+# the caller holds the response id between them. Field offsets follow Wireshark's touchlink dissector.
+
+TOUCHLINK_CLUSTER = 0x1000
+ZLL_CMD_SCAN_RESPONSE = 0x01
+ZLL_CMD_NETWORK_START_REQUEST = 0x10
+ZLL_CMD_NETWORK_JOIN_ROUTER_REQUEST = 0x12
+ZLL_CMD_NETWORK_JOIN_ENDDEV_REQUEST = 0x14
+_ZLL_KEY_TRANSPORT_COMMANDS = (ZLL_CMD_NETWORK_START_REQUEST, ZLL_CMD_NETWORK_JOIN_ROUTER_REQUEST,
+                               ZLL_CMD_NETWORK_JOIN_ENDDEV_REQUEST)
+
+
+def _touchlink_command(frame: bytes) -> tuple[int, int, _Walk] | None:
+    """Walk a Touchlink commissioning frame up to its command payload.
+
+    Returns (ZCL command id, inter-PAN transaction id, walker positioned just after the transaction id),
+    or None if the frame is not an inter-PAN frame on the Touchlink commissioning cluster."""
+    try:
+        w = _Walk(frame)
+        if frame[0] & 0x07 != 1:   # MAC must be a data frame
+            return None
+        _skip_mac(w)
+        nwk_fcf = w.u16()
+        if nwk_fcf & 0x03 != 0x03:   # NWK stub: inter-PAN frame type
+            return None
+        aps_fcf = w.u8()
+        if aps_fcf & 0x03 != 0x03:   # APS stub: inter-PAN frame type
+            return None
+        if (aps_fcf >> 2) & 0x03 == 0x03:   # group delivery carries a 2-byte group address first
+            w.u16()
+        cluster = w.u16()
+        w.u16()                      # profile id
+        if cluster != TOUCHLINK_CLUSTER:
+            return None
+        zcl_fcf = w.u8()
+        if zcl_fcf & 0x03 != 0x01:   # ZCL cluster-specific command
+            return None
+        w.u8()                       # ZCL transaction sequence number
+        command = w.u8()
+        if command >= 0x40:          # commissioning commands (0x00-0x3f) all begin with a transaction id
+            return None
+        transaction_id = int.from_bytes(w.take(4), "little")
+        return command, transaction_id, w
+    except (IndexError, ValueError):
+        return None
+
+
+def touchlink_scan_response(frame: bytes) -> tuple[int, int] | None:
+    """(inter-PAN transaction id, response id) from a Touchlink Scan Response, or None.
+
+    The response id is needed to recover the network key from a later join on the same transaction."""
+    parsed = _touchlink_command(frame)
+    if parsed is None:
+        return None
+    command, transaction_id, w = parsed
+    if command != ZLL_CMD_SCAN_RESPONSE:
+        return None
+    try:
+        w.u8(); w.u8(); w.u8()   # rssi correction, zigbee info, zll info
+        w.u16()                  # key bitmask
+        response_id = int.from_bytes(w.take(4), "little")
+        return transaction_id, response_id
+    except (IndexError, ValueError):
+        return None
+
+
+def touchlink_key_transport(frame: bytes) -> dict | None:
+    """{transaction_id, key_index, encrypted_key} from a Touchlink network start/join request, or None."""
+    parsed = _touchlink_command(frame)
+    if parsed is None:
+        return None
+    command, transaction_id, w = parsed
+    if command not in _ZLL_KEY_TRANSPORT_COMMANDS:
+        return None
+    try:
+        w.take(8)                # extended PAN id
+        key_index = w.u8()
+        encrypted_key = w.take(16)
+        if len(encrypted_key) != 16:
+            return None
+        return {"transaction_id": transaction_id, "key_index": key_index, "encrypted_key": encrypted_key}
+    except (IndexError, ValueError):
+        return None
+
+
+def recover_touchlink_network_key(frame: bytes, response_id: int) -> bytes | None:
+    """If this frame is a Touchlink join transporting the network key, recover it with the base key its
+    key index selects (the leaked ZLL master key, the public certification key, or the development key).
+
+    `response_id` is the one seen earlier in the Scan Response of the same transaction. Returns None if
+    the frame is not such a join or its key index is unsupported."""
+    env = touchlink_key_transport(frame)
+    if env is None:
+        return None
+    return crypto.zll_decrypt_network_key(env["key_index"], env["transaction_id"], response_id, env["encrypted_key"])
+
+
 def decrypt_network_payload(frame: bytes, network_key: bytes) -> bytes | None:
     """Return the decrypted NWK payload (APS layer) of a secured data frame, or None."""
     env = network_envelope(frame)
@@ -298,6 +402,43 @@ def build_transport_key(link_key: bytes, *, seq: int, pan: int, mac_dst: int, ma
     aad = aps + aux
     ct = crypto.ccm_star_encrypt(crypto.transport_key_key(link_key), crypto.nonce(coord64, counter, secctl), command, aad)
     return mac + nwk + aps + aux + ct
+
+
+def _touchlink_interpan_header(seq: int, pan: int, mac_dst: int, mac_src: int, *, command: int,
+                               transaction_id: int, response: bool) -> bytes:
+    """MAC data header + inter-PAN NWK/APS stubs + ZCL header, up to and including the transaction id."""
+    mac = _mac_data_header(seq, pan, mac_dst, mac_src)
+    nwk = bytes([0x0B, 0x00])                        # inter-PAN NWK stub (frame type 3, version 2)
+    aps = bytes([0x03]) + TOUCHLINK_CLUSTER.to_bytes(2, "little") + (0xC05E).to_bytes(2, "little")  # inter-PAN APS stub
+    zcl = bytes([0x09 if response else 0x01, seq & 0xFF, command])   # ZCL cluster-specific command
+    return mac + nwk + aps + zcl + transaction_id.to_bytes(4, "little")
+
+
+def build_touchlink_scan_response(*, seq: int, pan: int, mac_dst: int, mac_src: int,
+                                  transaction_id: int, response_id: int) -> bytes:
+    """A Touchlink Scan Response carrying the response identifier of this commissioning transaction."""
+    head = _touchlink_interpan_header(seq, pan, mac_dst, mac_src, command=ZLL_CMD_SCAN_RESPONSE,
+                                      transaction_id=transaction_id, response=True)
+    body = bytes([0x00, 0x12, 0x12]) + (0x1122).to_bytes(2, "little")   # rssi correction, zigbee info, zll info, key bitmask
+    body += response_id.to_bytes(4, "little")
+    body += (0).to_bytes(8, "little") + bytes([0x00, 0x0b]) + (pan).to_bytes(2, "little")   # ext pan id, nwk update id, channel, pan id
+    body += (mac_src).to_bytes(2, "little") + bytes([0x00, 0x00])       # nwk addr, sub-devices (0), total groups
+    return head + body
+
+
+def build_touchlink_network_join(key_index: int, *, seq: int, pan: int, mac_dst: int, mac_src: int,
+                                 transaction_id: int, response_id: int, network_key: bytes,
+                                 command: int = ZLL_CMD_NETWORK_JOIN_ROUTER_REQUEST) -> bytes:
+    """A Touchlink join that transports `network_key`, encrypted under the base key `key_index` selects."""
+    transport_key = crypto.zll_transport_key(key_index, transaction_id, response_id)
+    if transport_key is None:
+        raise ValueError(f"unknown ZLL key index {key_index}")
+    encrypted_key = crypto.aes_ecb(transport_key, network_key)
+    head = _touchlink_interpan_header(seq, pan, mac_dst, mac_src, command=command,
+                                      transaction_id=transaction_id, response=False)
+    body = (0).to_bytes(8, "little") + bytes([key_index]) + encrypted_key   # ext pan id, key index, encrypted network key
+    body += bytes([0x00, 0x0b]) + (pan).to_bytes(2, "little") + (mac_dst).to_bytes(2, "little")   # nwk update id, channel, pan id, nwk addr
+    return head + body
 
 
 def zcl_basic_response(manufacturer: str, model: str, power: int = 3, *, sw: str = "", src_ep: int = 1, seq: int = 1) -> bytes:

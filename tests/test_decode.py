@@ -54,6 +54,53 @@ def test_battery_is_read_from_a_power_config_report():
     assert decode.identify(frame, NET) is None          # a Power Config report is not a Basic one
 
 
+def test_touchlink_scan_response_yields_transaction_and_response_id():
+    frame = decode.build_touchlink_scan_response(seq=1, pan=0x1a62, mac_dst=0x0000, mac_src=0x1234,
+                                                 transaction_id=0x12345678, response_id=0x9abcdef0)
+    assert decode.touchlink_scan_response(frame) == (0x12345678, 0x9abcdef0)
+    # A key-transport frame is not a scan response, and vice versa.
+    assert decode.touchlink_key_transport(frame) is None
+
+
+def test_touchlink_join_recovers_network_key_with_the_master_key():
+    # End to end: a Network Join Router request that transported the network key under the ZLL master key
+    # is parsed and the key recovered using the response id from the Scan Response of the same transaction.
+    tid, rid = 0x12345678, 0x9abcdef0
+    scan = decode.build_touchlink_scan_response(seq=1, pan=0x1a62, mac_dst=0x0000, mac_src=0x3344,
+                                                transaction_id=tid, response_id=rid)
+    _, response_id = decode.touchlink_scan_response(scan)
+    join = decode.build_touchlink_network_join(crypto.ZLL_KEY_INDEX_MASTER, seq=2, pan=0x1a62,
+                                               mac_dst=0x3344, mac_src=0x0000, transaction_id=tid,
+                                               response_id=rid, network_key=NET)
+    env = decode.touchlink_key_transport(join)
+    assert env["key_index"] == crypto.ZLL_KEY_INDEX_MASTER and env["transaction_id"] == tid
+    assert decode.recover_touchlink_network_key(join, response_id) == NET
+    # The wrong response id (e.g. no scan response seen) does not recover the real key.
+    assert decode.recover_touchlink_network_key(join, 0) != NET
+
+
+def test_touchlink_join_recovers_network_key_with_the_certification_key():
+    tid, rid = 0x0abbccdd, 0x11223344
+    join = decode.build_touchlink_network_join(crypto.ZLL_KEY_INDEX_CERTIFICATION, seq=3, pan=0x1a62,
+                                               mac_dst=0x5566, mac_src=0x0000, transaction_id=tid,
+                                               response_id=rid, network_key=NET,
+                                               command=decode.ZLL_CMD_NETWORK_START_REQUEST)
+    assert decode.recover_touchlink_network_key(join, rid) == NET
+
+
+def test_touchlink_recovery_ignores_non_touchlink_frames():
+    # An ordinary APS transport-key join is not a Touchlink frame.
+    aps_join = decode.build_transport_key(crypto.DEFAULT_TC_LINK_KEY, seq=1, pan=0x1a62, mac_dst=0xcd4a,
+                                          mac_src=0x0000, coord64=COORD64, counter=0, network_key=NET)
+    assert decode.touchlink_key_transport(aps_join) is None
+    assert decode.recover_touchlink_network_key(aps_join, 0x11223344) is None
+    # And a Touchlink join is not mistaken for an APS transport-key join.
+    join = decode.build_touchlink_network_join(crypto.ZLL_KEY_INDEX_MASTER, seq=2, pan=0x1a62,
+                                               mac_dst=0x3344, mac_src=0x0000, transaction_id=1,
+                                               response_id=2, network_key=NET)
+    assert decode.recover_network_key(join) is None
+
+
 def test_network_payload_round_trips():
     frame = decode.build_secured_nwk(NET, seq=1, pan=0x1a62, mac_dst=0x0000, mac_src=0x1234,
                                      nwk_dst=0x0000, nwk_src=0x1234, radius=30, nwk_seq=1,

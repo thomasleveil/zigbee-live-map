@@ -1,4 +1,51 @@
+import hashlib
+
 from zigbee_live_map import crypto
+
+
+def test_aes_ecb_matches_nist_fips197_known_answer():
+    # FIPS-197 Appendix C.1: the published AES-128 known-answer, proving aes_ecb / aes_ecb_decrypt are
+    # genuine AES-128 and not some look-alike. This anchors the Touchlink vector below to real AES.
+    key = bytes.fromhex("000102030405060708090a0b0c0d0e0f")
+    plain = bytes.fromhex("00112233445566778899aabbccddeeff")
+    cipher = bytes.fromhex("69c4e0d86a7b0430d8cdb78070b4c55a")
+    assert crypto.aes_ecb(key, plain) == cipher
+    assert crypto.aes_ecb_decrypt(key, cipher) == plain
+
+
+def test_zll_master_key_constant_matches_published_hash():
+    # The leaked ZLL master key, cross-checked against the MD5 the Z3sec research tool publishes for it
+    # (z3sec/touchlink_crypt.py), so a typo in the constant cannot pass unnoticed.
+    assert hashlib.md5(crypto.ZLL_MASTER_KEY).hexdigest() == "68eba85ac7514d786fce56731e24f9c8"
+
+
+# External test vectors for the Touchlink network-key transport. The expected network key is produced by
+# an INDEPENDENT oracle, not by this module: the published ZLL derivation (ZLL spec 8.7.5.2.3 / 8.7.4)
+# transcribed verbatim from two agreeing primary sources (Wireshark's packet-zbee-zcl-general.c and the
+# Z3sec tool's touchlink_crypt.py), run with the cryptography library's raw AES-128-ECB. Each row is the
+# encrypted-network-key field a capture would carry and the network key it must decrypt to. A wrong
+# expand order, endianness, or encrypt/decrypt direction in this module fails these. (A self round-trip
+# would not: it is deliberately not used as the proof here.)
+#   transaction_id = 0x12345678, response_id = 0x9abcdef0, network_key = 0f1e2d3c4b5a69788796a5b4c3d2e1f0
+_ZLL_VECTORS = [
+    (crypto.ZLL_KEY_INDEX_DEVELOPMENT,   "81a016a52c44cc0e4eb31406cf55afee"),
+    (crypto.ZLL_KEY_INDEX_MASTER,        "d824e998595b271b8f0d63228a742aac"),
+    (crypto.ZLL_KEY_INDEX_CERTIFICATION, "bc2a3c37232bce11f24589c6de6a36cf"),
+]
+
+
+def test_zll_decrypt_network_key_matches_external_vector():
+    transaction_id, response_id = 0x12345678, 0x9ABCDEF0
+    expected = bytes.fromhex("0f1e2d3c4b5a69788796a5b4c3d2e1f0")
+    for key_index, encrypted_hex in _ZLL_VECTORS:
+        recovered = crypto.zll_decrypt_network_key(key_index, transaction_id, response_id,
+                                                   bytes.fromhex(encrypted_hex))
+        assert recovered == expected, f"key_index {key_index}"
+
+
+def test_zll_decrypt_network_key_rejects_unknown_index_and_short_field():
+    assert crypto.zll_decrypt_network_key(7, 1, 2, bytes(16)) is None     # no base key for index 7
+    assert crypto.zll_decrypt_network_key(crypto.ZLL_KEY_INDEX_MASTER, 1, 2, bytes(15)) is None  # not 16 bytes
 
 
 def test_ccm_star_round_trip_and_tamper_detection():
