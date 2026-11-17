@@ -135,10 +135,36 @@ homeassistant/try-locally.sh down     # removes the containers, the network, the
 
 Everything it creates is named `zlm-*`; `ZLM_TRY_PORT` changes the host port.
 
-**What has not been tested.**
+**Try it with the dongle.** The script passes no USB device. To check that the image can open the dongle, replace the app container it started with one that sees the USB bus. Stop any other copy of the tool first: only one program can hold the dongle.
 
-- **A real Supervisor.** The script stands in for its proxy; it does not check a Home Assistant session, does not apply AppArmor, and does not pass any USB device.
-- **USB passthrough of the dongle.** The app asks for it with `usb: true`, the key the Home Assistant documentation gives for raw access through `/dev/bus/usb`, which is what libusb needs. Whether that key alone lets the app open a CC2531 (`0451:16ae`), and what the default AppArmor profile does to it, is **unverified on hardware**. The image does contain libusb, and its USB backend loads there, but nothing here has talked to a dongle from inside a container.
+```sh
+ZLM_TRY_DEMO=false homeassistant/try-locally.sh
+# your channel instead of 11:
+printf '{"channel": 11, "demo": false, "allowed_hosts": []}\n' > homeassistant/.try-locally/data/options.json
+docker rm -f zlm-app
+docker run -d --name zlm-app --network zlm-net --ip 172.30.33.10 \
+    -e SUPERVISOR_TOKEN=dummy-not-a-supervisor-token \
+    -v "$PWD/homeassistant/.try-locally/data:/data" \
+    -v /dev/bus/usb:/dev/bus/usb --device-cgroup-rule 'c 189:* rwm' \
+    zlm-zigbee-live-map:local
+```
+
+The last two options are what a container needs for raw USB: the device nodes of the USB bus, and the right to open them (character devices with major number 189). They mirror what the Supervisor does: it mounts the host's `/dev` in every app container ([`docker/app.py`](https://github.com/home-assistant/supervisor/blob/main/supervisor/docker/app.py)) and adds that same device rule for an app that declares `usb: true` ([`hardware/policy.py`](https://github.com/home-assistant/supervisor/blob/main/supervisor/hardware/policy.py)).
+
+On macOS, Docker runs containers in a Linux virtual machine, which does not see the Mac's USB ports until the dongle is handed over to it. With [OrbStack](https://docs.orbstack.dev/features/usb) 2.2 or later:
+
+```sh
+orb usb list           # find the id of "CC2531 USB Dongle"
+orb usb attach <id>    # the dongle leaves macOS and appears in Linux
+orb usb detach <id>    # gives it back to macOS
+```
+
+While it is attached, a copy of the tool running directly on the Mac cannot use the dongle. On a Linux computer Docker runs without a virtual machine, so there is nothing to hand over.
+
+**What has been tested, and what has not.**
+
+- **The dongle from inside the container: tested on one set-up**, OrbStack 2.2.5 on an Apple-silicon Mac, with the commands above. The app opened the CC2531 (`0451:16ae`), showed live traffic through the stand-in proxy, and found the dongle again by itself after it was detached and re-attached while the container kept running. Docker on a Linux computer and Docker Desktop have not been tried.
+- **A real Supervisor: not tested.** The script stands in for its proxy; it does not check a Home Assistant session and does not apply AppArmor. That `usb: true` gives the app the two things used above is read from the Supervisor's source, not observed on a Home Assistant machine, and what the default AppArmor profile does to libusb is unknown.
 - Only the architecture of the machine that built it has been built: `aarch64`. `amd64` is declared, from the documentation, and untested.
 
 ## Device names
