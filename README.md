@@ -131,7 +131,7 @@ Comment out the `image:` line of `homeassistant/zigbee_live_map/config.yaml`, th
 1. Raise `version` in `pyproject.toml` and in `homeassistant/zigbee_live_map/config.yaml` (a test keeps them equal), and add the version to the app's `CHANGELOG.md`.
 2. Push to `main`. Until the build ends, Home Assistant offers an update that it cannot download yet.
 
-Home Assistant pulls `ghcr.io/thomasleveil/zigbee-live-map` without signing in, so that package has to be public. Here the packages were public as soon as the workflow of this public repository created them; if Home Assistant cannot download the image, the package's visibility, in its settings on GitHub, is the first thing to check. The very first publication failed at its last step (the registry answered 403 for a package it had just created) and passed when that job was run again.
+Home Assistant pulls `ghcr.io/thomasleveil/zigbee-live-map` without signing in, so that package has to be public. Here the packages were public as soon as the workflow of this public repository created them; if Home Assistant cannot download the image, the package's visibility, in its settings on GitHub, is the first thing to check. The very first publication failed at its last step (the registry answered 403) and passed when that job was run again; the cause was not established.
 
 **Options**, on the app's *Configuration* tab:
 
