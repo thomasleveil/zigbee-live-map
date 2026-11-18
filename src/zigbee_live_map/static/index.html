@@ -213,6 +213,10 @@ const NWK_STATUS_INFO = new Set([10, 14, 15, 16]);   // network status codes tha
 const MAX_EVENTS = 20000, LOG_ROWS = 250, WINDOW_S = 120;
 const FORWARD_TIMEOUT_S = 12;        // a frame not relayed after this long is counted as not relayed
 const LINK_MIN_FRAMES = 20;          // below this, a retransmission rate says nothing
+// LQI (0-255) is vendor-specific. On a real network, routers' Link Status costs matched it this way: cost 1 at LQI 117+, cost 5+ at 47 and below.
+const LQI_POOR = 50, LQI_FAIR = 100;
+const APS_ACK_WAIT_S = 10;           // an end-to-end acknowledgement not seen after this long counts as missing
+const E2E_MIN = 10;                  // below this many acknowledged-mode messages, a delivery rate says nothing
 const RETRY_EMA = 0.05;              // the retry rate is a moving average, so it falls again when a link recovers
 const RM = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const catLabel = c => t(`cat.${ZLM.has(`cat.${c}.label`) ? c : "other"}.label`);
@@ -226,7 +230,7 @@ const newFocus = () => ({ polls: 0, relayed: 0, rebroadcast: 0, beacon: null, jo
 function reset() {
   S = { pans: {}, hint: new Map(), nodes: new Map(), links: new Map(), pairs: new Map(), waiting: new Map(), lastHandover: null, sweptAt: 0, ghostsAt: 0, events: [], counts: {},
         ieee2addr: new Map(), nwkFail: new Map(), rejoins: new Map(), names: {}, vendors: {}, focusIeee: null, focusAddr: null, total: 0, recent: [], pan: null, mode: "live", channel: null, canTune: false, haApp: false, focus: newFocus(),
-        security: { vulnerable: false, secureJoinSeen: false, keyKnown: false, keySource: null, key: null }, identities: {}, costs: {}, batteries: {},
+        security: { vulnerable: false, secureJoinSeen: false, keyKnown: false, keySource: null, key: null }, identities: {}, costs: {}, batteries: {}, neighbors: {}, e2e: new Map(), apsWait: new Map(), apsSweptAt: 0,
         hue: { configured: false, devices: {} } };
   parts.length = 0; rings.length = 0;
 }
@@ -319,6 +323,21 @@ function removeNode(addr) {
   if (sel === addr) sel = null;
   dirty.devices = dirty.card = true;
 }
+// End to end: a message sent in acknowledged mode, and the APS acknowledgement its final recipient sends back to its author.
+// Keyed by author, recipient and APS counter, so the same message seen on every hop of its path counts once.
+const e2e = (a, b) => { const k = `${a}>${b}`; let s = S.e2e.get(k); if (!s) { s = { a, b, sent: 0, acked: 0, lost: 0, rtt: 0 }; S.e2e.set(k, s); } return s; };
+function trackAps(e) {
+  if (e.ap === "req" && !BROADCAST.has(e.nd)) {
+    const k = `${e.ns}|${e.nd}|${e.ac}`;
+    if (!S.apsWait.has(k)) { S.apsWait.set(k, e.t); e2e(e.ns, e.nd).sent++; }
+  } else if (e.ap === "ack") {
+    const k = `${e.nd}|${e.ns}|${e.ac}`, t0 = S.apsWait.get(k);
+    if (t0 != null) { S.apsWait.delete(k); const s = e2e(e.nd, e.ns); s.acked++; s.rtt += e.t - t0; e.rtt = Math.round((e.t - t0) * 1000); }
+  }
+  if (e.t - S.apsSweptAt < 1) return;
+  S.apsSweptAt = e.t;
+  for (const [k, t0] of S.apsWait) if (e.t - t0 > APS_ACK_WAIT_S) { S.apsWait.delete(k); const [a, b] = k.split("|"); e2e(a, b).lost++; }
+}
 function sweepGhosts(now) {
   if (now - S.ghostsAt < 1) return;
   S.ghostsAt = now;
@@ -365,6 +384,7 @@ function processEvent(e, live) {
   }
   if (e.nc === "rejoin_response" && e.nx && e.nx.status === 0) S.rejoins.set(e.nx.addr, (S.rejoins.get(e.nx.addr) || 0) + 1);   // it had lost its parent
   if (e.cat === "ack" && ms) { const w = S.waiting.get(S.lastHandover); if (w && w.router === ms && w.from === md) w.acked = true; }
+  if (e.ap && e.ns && e.nd) trackAps(e);
   sweepGhosts(e.t);
   tallyFocus(e, ms, md);
   if (live) { if (!hidden.has(e.cat)) spawn(e, ms, md, toAll); logLive(e); }
@@ -388,13 +408,16 @@ function explain(e) {
     case "nwk_cmd": text = e.nc ? t("explain.nwkcmd", { ...v, command: ZLM.has("nwkcmd." + e.nc) ? t("nwkcmd." + e.nc) : t("nwkcmd.other", { id: e.nc }) }) : t("explain.nwk_cmd", v); break;
     default: text = ZLM.has("explain." + e.cat) ? t("explain." + e.cat, v) : catLearn(e.cat);
   }
-  return text + (e.nx ? nwkDetail(e.nc, e.nx) : "") + (e.rt ? t("explain.retry") : "");
+  const aps = e.ap === "ack" ? " " + t(e.rtt != null ? "apsx.ack.rtt" : "apsx.ack", { ms: e.rtt }) : e.ap === "req" ? " " + t("apsx.req") : "";
+  const zdo = e.zd === "mgmt_lqi" ? " " + t("apsx.mgmt_lqi") : "";
+  return text + (e.nx ? nwkDetail(e.nc, e.nx) : "") + aps + zdo + (e.rt ? t("explain.retry") : "");
 }
 // What a decrypted network command says (the server reads it only when it has the network key).
 function nwkDetail(nc, x) {
   const status = (prefix, code) => ZLM.has(`${prefix}.${code}`) ? t(`${prefix}.${code}`) : t(`${prefix}.other`, { code });
   switch (nc) {
     case "route_request": return x.m2o ? "" : " " + t("nwkx.route_request", { dst: label(x.dst) });
+    case "link_status": return x.links && x.links.length ? " " + t("nwkx.link_status", { links: x.links.map(r => `${label(r.addr)} (${t("card.costRow", { in: costText(r.incoming), out: costText(r.outgoing) })})`).join(", ") }) : "";
     case "route_reply": return " " + t("nwkx.route_reply", { originator: label(x.originator), responder: label(x.responder), cost: x.cost });
     case "network_status": return " " + t("nwkx.network_status", { status: status("nwkstatus", x.status), addr: label(x.addr) });
     case "leave": return x.request ? " " + t("nwkx.leave.request") : x.rejoin ? " " + t("nwkx.leave.rejoin") : "";
@@ -474,10 +497,22 @@ function costBetween(a, b) {
   scan(S.costs[a], b); scan(S.costs[b], a);
   return worst || null;
 }
-// How far apart to push two nodes: the decrypted cost when the key gives it, else the passive retry rate.
+// The LQI at which a router receives a neighbour, from its decrypted neighbour table (Mgmt_Lqi); the worse of both directions.
+// It covers the links to end devices, which Link Status leaves out.
+// LQI read on the same scale as a Link Status cost, from the calibration above: 117 and better is 1, 25 and worse is 7.
+const lqiAsCost = lqi => lqi >= 117 ? 1 : lqi <= 25 ? 7 : 1 + 6 * (117 - lqi) / 92;
+function lqiBetween(a, b) {
+  let worst = null;
+  const scan = (rows, target) => { if (rows) for (const r of rows) if (r.addr === target) worst = worst == null ? r.lqi : Math.min(worst, r.lqi); };
+  scan(S.neighbors[a], b); scan(S.neighbors[b], a);
+  return worst;
+}
+// How far apart to push two nodes: the decrypted cost when the key gives it, then the LQI, else the passive retry rate.
 function stretch(a, b) {
   const cost = costBetween(a, b);
   if (cost != null) return 1 + Math.min(1.3, (cost - 1) / 6 * 1.3);
+  const lqi = lqiBetween(a, b);
+  if (lqi != null) return 1 + (lqiAsCost(lqi) - 1) / 6 * 1.3;
   const p = S.pairs.get(pairKey(a, b));
   return rated(p) ? 1 + Math.min(1.3, retryRate(p) * 4.5) : 1;
 }
@@ -569,6 +604,8 @@ function draw(ts) {
   const linkHealth = (a, b) => {
     const cost = costBetween(a, b);
     if (cost != null) return { bad: cost >= 4, label: `${cost}/7` };
+    const lqi = lqiBetween(a, b);
+    if (lqi != null) return { bad: lqi < LQI_POOR, label: `LQI ${lqi}` };
     const p = S.pairs.get(pairKey(a, b)), q = quality(p);
     return { bad: q === "poor" || q === "fair", label: `${Math.round(retryRate(p) * 100)} %` };
   };
@@ -736,6 +773,10 @@ function renderCard() {
     id && id.power ? [c("idPower"), t("power." + (ZLM.has("power." + id.power) ? id.power : "unknown"))] : null,
     id && id.sw ? [c("firmware"), id.sw] : null, id && id.appVer != null ? [c("appver"), id.appVer] : null,
     batt ? [c("battery"), batt.percent != null ? `${batt.percent} %` : `${batt.volts} V`] : null].filter(Boolean);
+  const out = [...S.e2e.values()].filter(s => s.a === sel), sent = out.reduce((n, s) => n + s.acked + s.lost, 0), acked = out.reduce((n, s) => n + s.acked, 0);
+  if (sent) keyed.push([c("e2e"), t("card.e2eValue", { acked, total: sent, pct: Math.round(100 * acked / sent), ms: acked ? Math.round(1000 * out.reduce((n, s) => n + s.rtt, 0) / acked) : "?" })]);
+  const nbRows = (S.neighbors[sel] || []).slice().sort((a, b) => a.lqi - b.lqi);
+  const neighbours = nbRows.map(r => `<li><span>${esc(label(r.addr))} · ${esc(t("rel." + r.rel))}</span><span class="${r.lqi < LQI_POOR ? "hi" : ""}">LQI ${r.lqi}</span></li>`).join("");
   const costRows = S.costs[sel] || [];
   const costs = costRows.map(r => { const hi = r.incoming >= 5 || r.outgoing >= 5; return `<li><span>${esc(label(r.addr))}</span><span class="${hi ? "hi" : ""}">${esc(t("card.costRow", { in: costText(r.incoming), out: costText(r.outgoing) }))}</span></li>`; }).join("");
   const dl = rows => `<dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`;
@@ -752,8 +793,9 @@ function renderCard() {
     `<p>${Object.entries(n.cats).sort((a, b) => b[1] - a[1]).map(([cat, k]) => chip(cat, ` <span class="n">${k}</span>`)).join(" ")}</p></div>` +
     hubGroup +
     `<div class="detailGroup keyed"><h3>${esc(t("detail.keyed"))}</h3>` +
-    (keyed.length || costs
+    (keyed.length || costs || neighbours
       ? (keyed.length ? dl(keyed) : "") + (costs ? `<div class="note">${esc(c("costs"))}</div><ul class="costs">${costs}</ul>` : "")
+        + (neighbours ? `<div class="note">${esc(c("neighbours"))}</div><ul class="costs">${neighbours}</ul>` : "")
       : `<p class="note">${esc(t(S.security && S.security.keyKnown ? "detail.keyedWaiting" : "detail.keyless"))}</p>`) +
     `</div>`;
   if (html !== cardHtml) $("cardBody").innerHTML = cardHtml = html;   // unchanged: the nodes stay, and so do the scroll position and any selection
@@ -783,6 +825,18 @@ function findIssues() {
   for (const f of S.nwkFail.values()) if (f.n >= 3)
     out.push({ weight: 5 + Math.min(f.n, 1000) / 1000, node: f.by, text: t("issues.nwkStatus", { name: label(f.by), status: ZLM.has("nwkstatus." + f.status) ? t("nwkstatus." + f.status) : t("nwkstatus.other", { code: f.status }), addr: label(f.addr), n: f.n }) });
   for (const [addr, n] of S.rejoins) if (n >= 2) out.push({ weight: 4 + Math.min(n, 100) / 100, node: addr, text: t("issues.rejoins", { name: label(addr), n }) });
+  const lqiSeen = new Set();   // links Link Status does not rate (end devices, mostly): the neighbour table's LQI
+  for (const [addr, rows] of Object.entries(S.neighbors)) for (const r of rows) {
+    const k = pairKey(addr, r.addr);
+    if (r.lqi >= LQI_POOR || costBetween(addr, r.addr) != null || lqiSeen.has(k)) continue;
+    if (!(r.rel === "child" || r.rel === "parent")) continue;
+    lqiSeen.add(k);
+    out.push({ weight: 4.8 + (LQI_POOR - r.lqi) / 500, node: addr, text: t("issues.lqi", { a: label(addr), b: label(r.addr), lqi: r.lqi }) });
+  }
+  for (const s of S.e2e.values()) {
+    const done = s.acked + s.lost;
+    if (done >= E2E_MIN && s.acked / done < .9) out.push({ weight: 4.6 + (1 - s.acked / done) / 2, node: s.a, text: t("issues.e2e", { a: label(s.a), b: label(s.b), pct: Math.round(100 * s.acked / done), acked: s.acked, total: done }) });
+  }
   for (const [addr, b] of Object.entries(S.batteries)) if (b.percent != null && b.percent <= 15)
     out.push({ weight: 4 - b.percent / 100, node: addr, text: t("issues.battery", { name: label(addr), pct: b.percent }) });
   for (const p of S.pairs.values()) if (quality(p) === "poor")
@@ -963,7 +1017,7 @@ async function connect() {
       $("needsDesktop").hidden = $("needsDemoDesktop").hidden = S.haApp; $("needsApp").hidden = $("needsDemoApp").hidden = !S.haApp;
       S.focusIeee = (d.mode !== "demo" && prefs.get("focus", null)) || d.focus || null;
       if (d.security) S.security = d.security;
-      S.identities = d.identities || {}; S.costs = d.linkCosts || {}; S.batteries = d.batteries || {};
+      S.identities = d.identities || {}; S.costs = d.linkCosts || {}; S.batteries = d.batteries || {}; S.neighbors = d.neighbors || {};
       S.hue = d.hue || { configured: false, devices: {} }; ZLM.hueChanged(S.hue);
       $("chanBox").hidden = !S.canTune; if (S.channel) $("chan").value = S.channel;
       $("log").innerHTML = ""; issuesShown = "\u0000"; dirty.devices = dirty.card = dirty.legend = dirty.security = true; renderLegend(true);
@@ -976,6 +1030,7 @@ async function connect() {
     else if (d.type === "hue") { const { type, ...rest } = d; S.hue = rest; ZLM.hueChanged(rest); dirty.card = dirty.devices = true; issuesShown = "\u0000"; }
     else if (d.type === "identity") { S.identities[d.addr] = d.id; dirty.card = dirty.devices = true; }
     else if (d.type === "linkcosts") { S.costs[d.addr] = d.rows; dirty.card = true; issuesShown = "\u0000"; }
+    else if (d.type === "neighbors") { S.neighbors[d.addr] = d.rows; dirty.card = true; issuesShown = "\u0000"; }
     else if (d.type === "battery") { S.batteries[d.addr] = d.batt; dirty.card = dirty.devices = true; issuesShown = "\u0000"; }
     else if (d.type === "status") sniffer = d;
   };

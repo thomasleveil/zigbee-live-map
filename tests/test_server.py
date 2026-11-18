@@ -374,3 +374,29 @@ def test_the_network_key_names_network_commands_and_corrects_the_shape_guess(tmp
         ev = hub.events[-1]
         assert (ev["cat"], ev["nc"], ev["nx"]) == ("route_record", "route_record", {"relays": ["0x4ed9"]})
     run(scenario, tmp_path)
+
+
+def test_neighbour_tables_and_end_to_end_acknowledgements_are_read_with_the_key(tmp_path):
+    def secured(payload, src, dst, counter):
+        return decode.build_secured_nwk(NET, seq=counter, pan=0x1A62, mac_dst=dst, mac_src=src, nwk_dst=dst, nwk_src=src,
+                                        radius=30, nwk_seq=counter, src64=DEV64, counter=counter, payload=payload)
+
+    def entry(addr, flags, lqi):
+        return bytes(16) + addr.to_bytes(2, "little") + bytes([flags, 0, 1, lqi])
+
+    async def scenario(client, hub, origin):
+        hub.network_key = NET
+        zdo = bytes([5, 0, 2, 0, 2]) + entry(0x0000, 0x00 | (2 << 4), 117) + entry(0x3388, 0x02 | (1 << 4), 30)
+        lqi = bytes([0x00, 0x00]) + (0x8031).to_bytes(2, "little") + (0x0000).to_bytes(2, "little") + bytes([0x00, 0x10]) + zdo
+        await hub.publish(secured(lqi, 0x6CA5, 0x0000, 1), 1.0, None)
+        assert [(r["addr"], r["rel"], r["lqi"]) for r in hub.neighbors["0x6ca5"]] == [("0x0000", "sibling", 117), ("0x3388", "child", 30)]
+        assert hub.events[-1]["zd"] == "mgmt_lqi"
+        req = bytes([0x40, 0x01]) + (0x0402).to_bytes(2, "little") + (0x0104).to_bytes(2, "little") + bytes([0x01, 0x21]) + b"\x18\x01\x0a"
+        await hub.publish(secured(req, 0x6CA5, 0x0000, 2), 2.0, None)
+        assert (hub.events[-1]["ap"], hub.events[-1]["ac"]) == ("req", 0x21)
+        ack = bytes([0x02, 0x01]) + (0x0402).to_bytes(2, "little") + (0x0104).to_bytes(2, "little") + bytes([0x01, 0x21])
+        await hub.publish(secured(ack, 0x0000, 0x6CA5, 3), 2.05, None)
+        assert (hub.events[-1]["ap"], hub.events[-1]["ac"]) == ("ack", 0x21)
+        hello = hub.hello()
+        assert hello["neighbors"]["0x6ca5"][1]["lqi"] == 30
+    run(scenario, tmp_path)

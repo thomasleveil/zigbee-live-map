@@ -340,6 +340,85 @@ def battery(frame: bytes, network_key: bytes) -> dict | None:
     return _battery(res[1]) if res and res[0] == POWER_CONFIG_CLUSTER else None
 
 
+# --- APS layer: end-to-end acknowledgements and ZDO neighbour tables ----------------------------
+
+APS_TYPES = {0: "data", 1: "cmd", 2: "ack"}
+ZDO_PROFILE, MGMT_LQI_RSP = 0x0000, 0x8031
+LQI_DEVICE_TYPES = {0: "coordinator", 1: "router", 2: "end_device"}
+LQI_RELATIONSHIPS = {0: "parent", 1: "child", 2: "sibling", 3: "none", 4: "previous_child"}
+
+
+def aps_header(payload: bytes) -> dict | None:
+    """Read the APS header of a decrypted NWK payload (Zigbee PRO § 2.2.5).
+
+    Returns {type, ack_req, counter} plus cluster/profile when the frame carries them, and "payload" (the
+    APS payload) for an unsecured, unfragmented data frame. The header is in clear even when the APS layer
+    is secured with a link key; only the payload is not. None for inter-PAN or a truncated header."""
+    try:
+        w = _Walk(payload)
+        fc = w.u8()
+        ftype, mode = fc & 3, (fc >> 2) & 3
+        if ftype == 3:
+            return None
+        out: dict = {"type": APS_TYPES[ftype], "ack_req": bool(fc & 0x40)}
+        if ftype == 0:
+            if mode == 3:
+                w.u16()           # group address
+            else:
+                w.u8()            # destination endpoint
+            out["cluster"], out["profile"] = w.u16(), w.u16()
+            w.u8()                # source endpoint
+        elif ftype == 2 and not fc & 0x10:   # an acknowledgement of data echoes its endpoints, cluster and profile
+            w.u8()
+            out["cluster"], out["profile"] = w.u16(), w.u16()
+            w.u8()
+        out["counter"] = w.u8()
+        if w.pos > len(payload):
+            return None
+        if ftype == 0 and not fc & 0x20 and not fc & 0x80:   # not secured with a link key, not fragmented
+            out["payload"] = payload[w.pos:]
+        return out
+    except IndexError:
+        return None
+
+
+def mgmt_lqi(zdo: bytes) -> dict | None:
+    """A Mgmt_Lqi_rsp (ZDO 0x8031): one page of the responding router's neighbour table.
+
+    Each neighbour: its short and IEEE address, device type, relationship to the responder, depth and the
+    LQI (0-255) at which the responder receives it."""
+    try:
+        if len(zdo) < 5 or zdo[1] != 0:   # transaction sequence number, then status: 0 = success
+            return None
+        total, start, count = zdo[2], zdo[3], zdo[4]
+        rows = []
+        for i in range(count):
+            e = zdo[5 + 22 * i: 5 + 22 * (i + 1)]
+            if len(e) < 22:
+                return None
+            flags = e[18]
+            rows.append({"addr": f"0x{int.from_bytes(e[16:18], 'little'):04x}",
+                         "ieee": ":".join(f"{b:02x}" for b in reversed(e[8:16])),
+                         "type": LQI_DEVICE_TYPES.get(flags & 3, "unknown"),
+                         "rel": LQI_RELATIONSHIPS.get((flags >> 4) & 7, "unknown"),
+                         "depth": e[20], "lqi": e[21]})
+        return {"total": total, "start": start, "rows": rows}
+    except IndexError:
+        return None
+
+
+def device_info(aps: dict) -> dict | None:
+    """What a decrypted ZCL report says about its sender: identity (Basic) and/or battery (Power Config)."""
+    if aps.get("type") != "data" or aps.get("payload") is None or aps.get("profile") == ZDO_PROFILE:
+        return None
+    attrs = _zcl_values(aps["payload"])
+    if aps["cluster"] == ZCL_BASIC_CLUSTER:
+        return {"identity": _basic_identity(attrs), "battery": None}
+    if aps["cluster"] == POWER_CONFIG_CLUSTER:
+        return {"identity": None, "battery": _battery(attrs)}
+    return None
+
+
 def read_device(frame: bytes, network_key: bytes) -> dict | None:
     """One decrypt: whatever this ZCL report tells us about the device (identity and/or battery)."""
     res = read_cluster(frame, network_key)

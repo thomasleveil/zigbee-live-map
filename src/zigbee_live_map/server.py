@@ -144,6 +144,7 @@ class Hub:
         self.identities: dict[str, dict] = {}     # NWK short address -> {manufacturer, model, power}
         self.link_quality: dict[str, list] = {}   # router NWK short address -> per-neighbour costs
         self.batteries: dict[str, dict] = {}      # NWK short address -> {percent} or {volts}
+        self.neighbors: dict[str, list] = {}   # router NWK short address -> its neighbour table (Mgmt_Lqi)
         self.pan: str | None = None               # the dominant PAN heard, used to pick a saved key
         self._pan_counts: dict[str, int] = {}
 
@@ -187,6 +188,7 @@ class Hub:
             self.identities.clear()
             self.link_quality.clear()
             self.batteries.clear()
+            self.neighbors.clear()
             await self.send_security()
 
     async def send_security(self) -> None:
@@ -195,7 +197,8 @@ class Hub:
     def hello(self) -> dict:
         return {"type": "hello", "version": __version__, "build": page_build(), **self.info, "names": self.names(), "hue": self.hue.view(),
                 "vendors": self.vendors(), "security": self.security_state(),
-                "identities": self.identities, "linkCosts": self.link_quality, "batteries": self.batteries}
+                "identities": self.identities, "linkCosts": self.link_quality, "batteries": self.batteries,
+                "neighbors": self.neighbors}
 
     async def send_all(self, message: dict) -> None:
         text = json.dumps(message, separators=(",", ":"))
@@ -281,14 +284,27 @@ class Hub:
             # The key replaces the guess made from the frame's shape: name the command, correct the category.
             event["nc"] = cmd["name"]
             event["cat"] = cmd["name"] if cmd["name"] in NWK_COMMAND_CATS else "nwk_cmd"
-            rows = cmd["detail"].pop("links", None)
+            rows = cmd["detail"].get("links")
             if cmd["detail"]:
                 event["nx"] = cmd["detail"]
             if rows is not None and self.link_quality.get(ns) != rows:
                 self.link_quality[ns] = rows
                 await self.send_all({"type": "linkcosts", "addr": ns, "rows": rows})
         elif event.get("cat", "").startswith("data"):
-            info = decode.read_device(frame, key)   # one decrypt for both identity and battery
+            payload = decode.decrypt_network_payload(frame, key)
+            aps = decode.aps_header(payload) if payload else None
+            if aps is None:
+                return
+            # End-to-end acknowledgements: the page matches each acknowledgement to the message it confirms.
+            if aps["type"] == "ack" or (aps["type"] == "data" and aps["ack_req"]):
+                event["ap"], event["ac"] = ("ack" if aps["type"] == "ack" else "req"), aps["counter"]
+            if aps["type"] == "data" and aps.get("profile") == decode.ZDO_PROFILE and aps.get("cluster") == decode.MGMT_LQI_RSP:
+                table = decode.mgmt_lqi(aps.get("payload") or b"")
+                if table is not None:
+                    event["zd"] = "mgmt_lqi"
+                    await self._neighbour_page(ns, table)
+                return
+            info = decode.device_info(aps)   # the same decrypt gives identity and battery
             if info:
                 batt = info["battery"]
                 if batt is not None and self.batteries.get(ns) != batt:
@@ -297,6 +313,16 @@ class Hub:
                 if info["identity"] is not None and ns not in self.identities:
                     self.identities[ns] = info["identity"]
                     await self.send_all({"type": "identity", "addr": ns, "id": info["identity"]})
+
+    async def _neighbour_page(self, router: str, table: dict) -> None:
+        """One page of a router's neighbour table (Mgmt_Lqi_rsp). A page starting at 0 begins a new reading."""
+        known = {} if table["start"] == 0 else {r["addr"]: r for r in self.neighbors.get(router, [])}
+        for row in table["rows"]:
+            known[row["addr"]] = row
+        rows = sorted(known.values(), key=lambda r: r["addr"])[:table["total"] or None]
+        if self.neighbors.get(router) != rows:
+            self.neighbors[router] = rows
+            await self.send_all({"type": "neighbors", "addr": router, "rows": rows})
 
     async def set_status(self, sniffer: str, detail: str = "", reason: str = "") -> None:
         """`reason` is the sniffer's own code for what is missing (see SnifferError), empty when nothing is."""
@@ -359,6 +385,7 @@ class Hub:
         self.identities.clear()
         self.link_quality.clear()
         self.batteries.clear()
+        self.neighbors.clear()
         self.pan = None
         self._pan_counts.clear()
         self.network_key = self.key_source = None
@@ -805,6 +832,7 @@ async def api_keys_set(request: web.Request) -> web.Response:
         hub.identities.clear()
         hub.link_quality.clear()
         hub.batteries.clear()
+        hub.neighbors.clear()
         await hub.send_security()
     return web.json_response({"keys": hub.keys.describe(), "pan": hub.pan, "security": hub.security_state()})
 
@@ -818,6 +846,7 @@ async def api_keys_delete(request: web.Request) -> web.Response:
         hub.identities.clear()
         hub.link_quality.clear()
         hub.batteries.clear()
+        hub.neighbors.clear()
         await hub.send_security()
     return web.json_response({"keys": hub.keys.describe(), "pan": hub.pan, "security": hub.security_state()})
 

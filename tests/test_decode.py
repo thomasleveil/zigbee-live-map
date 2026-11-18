@@ -130,3 +130,30 @@ def test_a_truncated_nwk_command_keeps_its_name_without_guessed_fields():
     assert decode.nwk_command(bytes.fromhex("0300")) == {"name": "network_status", "detail": {}}
     assert decode.nwk_command(bytes.fromhex("0503d94e")) == {"name": "route_record", "detail": {}}
     assert decode.nwk_command(b"") is None
+
+
+def _lqi_entry(addr, ieee, flags, depth, lqi):
+    return bytes(8) + ieee.to_bytes(8, "little") + addr.to_bytes(2, "little") + bytes([flags, 0x02, depth, lqi])
+
+
+def test_mgmt_lqi_response_lists_neighbours_with_relationship_and_lqi():
+    zdo = bytes([7, 0, 3, 0, 2]) + _lqi_entry(0x0000, COORD64, 0x00 | 0x04 | (2 << 4), 0, 117) + _lqi_entry(0x3388, DEV64, 0x02 | (1 << 4), 2, 47)
+    table = decode.mgmt_lqi(zdo)
+    assert table["total"] == 3 and table["start"] == 0
+    assert table["rows"] == [
+        {"addr": "0x0000", "ieee": "00:12:4b:00:1a:2b:3c:4d", "type": "coordinator", "rel": "sibling", "depth": 0, "lqi": 117},
+        {"addr": "0x3388", "ieee": "00:15:8d:00:01:a2:b3:c4", "type": "end_device", "rel": "child", "depth": 2, "lqi": 47},
+    ]
+    assert decode.mgmt_lqi(bytes([7, 0x84, 0, 0, 0])) is None      # status "not supported"
+    assert decode.mgmt_lqi(zdo[:-3]) is None                        # cut short
+
+
+def test_aps_header_reads_data_acknowledgements_and_requests():
+    data = bytes([0x40, 0x01]) + (0x0402).to_bytes(2, "little") + (0x0104).to_bytes(2, "little") + bytes([0x01, 0x33]) + b"\x18\x01\x0a"
+    assert decode.aps_header(data) == {"type": "data", "ack_req": True, "cluster": 0x0402, "profile": 0x0104, "counter": 0x33, "payload": b"\x18\x01\x0a"}
+    ack = bytes([0x02, 0x01]) + (0x0402).to_bytes(2, "little") + (0x0104).to_bytes(2, "little") + bytes([0x01, 0x33])
+    assert decode.aps_header(ack) == {"type": "ack", "ack_req": False, "cluster": 0x0402, "profile": 0x0104, "counter": 0x33}
+    assert decode.aps_header(bytes([0x12, 0x07])) == {"type": "ack", "ack_req": False, "counter": 7}   # acknowledgement of an APS command
+    secured = bytes([0x60, 0x01]) + (0x0006).to_bytes(2, "little") + (0x0104).to_bytes(2, "little") + bytes([0x01, 0x09]) + bytes(10)
+    assert "payload" not in decode.aps_header(secured)               # link-key secured: header only
+    assert decode.aps_header(bytes([0x00, 0x01, 0x02])) is None      # truncated

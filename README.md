@@ -261,8 +261,12 @@ The measurements the devices keep to themselves travel inside the encrypted netw
 | The mesh rates a link poor | a router's Link Status: the cost it measures to each neighbour, both ways, from 1 (excellent) to 7 (very poor) | a weak router-to-router link, as the routers themselves see it |
 | Delivery failures reported | a router's Network Status command: it could not deliver (link failure, many-to-one route failure…), and about which device | a broken route, often to a battery device whose link to its parent is weak |
 | Repeated rejoins | Rejoin Response commands for the same device | a device that keeps losing its parent |
+| Weak link to an end device | a router's neighbour table (Mgmt_Lqi_rsp, which a hub such as Home Assistant requests when it scans the topology): the LQI at which it receives each neighbour, end devices included | a battery device poorly heard by its parent; Link Status does not cover these links |
+| Messages not confirmed end to end | APS acknowledgements: a message sent in acknowledged mode, and the acknowledgement its final recipient sends back | a device that does not get its messages, whatever the individual hops say |
 
-Every network command gets its real name in the log, replacing the guess made from the frame's shape: route requests and replies (with the path cost accumulated so far), route records and their relays, network status, leave, rejoin, end-device timeout. Devices also announce their manufacturer, model, power source, firmware and battery level, which names them on the map (see [Device names](#device-names)).
+LQI is vendor-specific (0-255, higher is better). The thresholds the tool uses come from comparing LQI with Link Status costs on a real network: cost 1 at LQI 117 and above, cost 5 or worse at 47 and below. Delays of acknowledgements are as precise as the sniffer's USB timing, a few milliseconds.
+
+The device sheet lists the neighbours a router reports with their LQI, and how many of a device's messages were confirmed end to end. Every network command gets its real name in the log, replacing the guess made from the frame's shape: route requests and replies (with the path cost accumulated so far), route records and their relays, network status, leave, rejoin, end-device timeout. Devices also announce their manufacturer, model, power source, firmware and battery level, which names them on the map (see [Device names](#device-names)).
 
 ## Reference
 
