@@ -18,6 +18,7 @@ The clear headers, and where each ends, come from wire.py: CCM* authenticates th
 
 from __future__ import annotations
 
+import struct
 from dataclasses import dataclass
 
 from . import crypto, wire
@@ -34,6 +35,8 @@ ZCL_STRING_TYPES = {0x41, 0x42}
 ZCL_TYPE_LEN = {0x00: 0, 0x08: 1, 0x09: 2, 0x0a: 3, 0x0b: 4, 0x10: 1, 0x18: 1, 0x19: 2, 0x1a: 3, 0x1b: 4,
                 0x20: 1, 0x21: 2, 0x22: 3, 0x23: 4, 0x24: 5, 0x25: 6, 0x26: 7, 0x27: 8,
                 0x28: 1, 0x29: 2, 0x2a: 3, 0x2b: 4, 0x30: 1, 0x31: 2, 0x38: 2, 0x39: 4}
+ZCL_SIGNED_TYPES = {0x28, 0x29, 0x2a, 0x2b}          # int8 … int32: a temperature below zero is one of these
+ZCL_FLOAT_TYPES = {0x38: "<e", 0x39: "<f"}           # half and single precision
 
 
 # --- secured payloads: what CCM* needs to open them ------------------------------------------------
@@ -357,10 +360,10 @@ def exchange(aps: dict) -> dict | None:
 
 
 def zcl_values(payload: bytes) -> dict:
-    """Decode a ZCL Read-Attributes-Response (0x01) or Report-Attributes (0x0a) into {attr id: int|str}.
+    """Decode a ZCL Read-Attributes-Response (0x01) or Report-Attributes (0x0a) into {attr id: int|float|str}.
 
-    Integers and strings are read; other types are skipped by their length, so a wanted attribute after
-    them is still reached. A truly unknown type stops the walk (its length is unknowable), and so does a
+    Integers (signed ones as signed), floats and strings are read; the other fixed-length types come out as
+    the integer their bytes spell, so a wanted attribute after them is still reached. A truly unknown type stops the walk (its length is unknowable), and so does a
     value that is cut short: it is left out, not read from the bytes that happen to be there."""
     out: dict = {}
     zcl = zcl_header(payload)
@@ -376,8 +379,10 @@ def zcl_values(payload: bytes) -> dict:
             dtype = rd.u8()
             if dtype in ZCL_STRING_TYPES:
                 out[attr] = rd.take(rd.u8()).decode("utf-8", "replace").strip("\x00 ")
+            elif dtype in ZCL_FLOAT_TYPES:
+                out[attr] = struct.unpack(ZCL_FLOAT_TYPES[dtype], rd.take(ZCL_TYPE_LEN[dtype]))[0]
             elif dtype in ZCL_TYPE_LEN:
-                out[attr] = rd.uint(ZCL_TYPE_LEN[dtype])
+                out[attr] = int.from_bytes(rd.take(ZCL_TYPE_LEN[dtype]), "little", signed=dtype in ZCL_SIGNED_TYPES)
             else:
                 break
     except ValueError:

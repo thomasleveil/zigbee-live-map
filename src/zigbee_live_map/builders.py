@@ -16,6 +16,7 @@ from .decode import (ATTR_BATTERY_PERCENT, ATTR_MANUFACTURER, ATTR_MODEL, ATTR_P
                      ZLL_CMD_SCAN_RESPONSE)
 
 HOME_AUTOMATION_PROFILE, ZLL_PROFILE = 0x0104, 0xC05E
+ZCL_FROM_SERVER = 0x18   # a global command a device sends about its own attributes: server to client, no default response wanted
 
 
 def short_bytes(addr: str) -> bytes:
@@ -171,7 +172,7 @@ def zcl_basic_response(manufacturer: str, model: str, power: int = 3, *, sw: str
     """An APS-data payload: a ZCL Read-Attributes-Response on the Basic cluster."""
     def attr(attr_id: int, dtype: int, value: bytes) -> bytes:
         return _u16(attr_id) + bytes([0x00, dtype]) + value
-    body = bytes([0x00, seq & 0xFF, 0x01])   # ZCL header: no manufacturer, seq, Read-Attr-Response
+    body = bytes([ZCL_FROM_SERVER, seq & 0xFF, 0x01])   # ZCL header, seq, Read-Attr-Response
     body += attr(ATTR_MANUFACTURER, 0x42, bytes([len(manufacturer)]) + manufacturer.encode())
     body += attr(ATTR_MODEL, 0x42, bytes([len(model)]) + model.encode())
     body += attr(ATTR_POWER_SOURCE, 0x30, bytes([power]))
@@ -182,6 +183,6 @@ def zcl_basic_response(manufacturer: str, model: str, power: int = 3, *, sw: str
 
 def power_config_report(percent: int, *, src_ep: int = 1, seq: int = 1) -> bytes:
     """An APS-data payload: a ZCL Report-Attributes on Power Configuration, carrying battery percentage."""
-    body = bytes([0x00, seq & 0xFF, 0x0a])   # ZCL header: no manufacturer, seq, Report Attributes
+    body = bytes([ZCL_FROM_SERVER, seq & 0xFF, 0x0a])   # ZCL header, seq, Report Attributes
     body += _u16(ATTR_BATTERY_PERCENT) + bytes([0x20, min(200, max(0, percent) * 2)])   # uint8, half-percent
     return _aps_data(POWER_CONFIG_CLUSTER, src_ep, seq) + body

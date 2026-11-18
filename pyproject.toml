@@ -13,7 +13,9 @@ dependencies = ["aiohttp>=3.9", "pyusb>=1.2", "truststore>=0.9", "cryptography>=
 zigbee-live-map = "zigbee_live_map.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+# zigpy is an oracle for the tests only: an independent Zigbee stack to check this tool's ZCL and ZDO decoders
+# against. It is GPL-3.0 and is never imported by the tool itself (tests/test_oracle_zigpy.py holds that).
+dev = ["pytest>=8", "zigpy>=2.4; python_version >= '3.11'"]
 
 [build-system]
 requires = ["hatchling"]
