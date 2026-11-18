@@ -17,6 +17,7 @@ A cheap USB sniffer dongle listens to the radio. Every frame becomes an animatio
 - **Things to look at.** Links where frames keep being sent again, routers that are slow to relay or do not relay, messages never collected by a sleeping device. See [Diagnostics](#diagnostics).
 - **A device sheet.** Role, chip maker, parent, children, retransmissions, relay delay, signal strength at the sniffer, and whether the router's beacons say it accepts children.
 - **An optional watch on one device.** Nothing is singled out by default. Click "Watch this device" on a router and the header keeps count of its children, what it relays and what it repeats.
+- **More with your network key.** Enter your network's key in *Settings* to understand the network in more detail: each network command is named with what it says (a route reply and its path cost, a router reporting a delivery it could not make, a device rejoining), routers' own link costs appear, and devices tell their model and battery level. See [With the network key](#with-the-network-key).
 - English and French, light and dark themes, keyboard accessible.
 
 ## Try it in one minute, without hardware
@@ -251,6 +252,18 @@ On the map, a link with many retransmissions is drawn in the warning colour with
 
 These are indicators, not measurements. A frame the sniffer missed looks exactly like a frame that was never sent, so place the dongle where it hears the devices you are investigating, and treat a warning as a place to look.
 
+### With the network key
+
+The measurements the devices keep to themselves travel inside the encrypted network layer. With your network's key (entered in *Settings*, or recovered by the default-key test below), the tool reads them, and the map and the log go from consequences to the network's own account of itself:
+
+| Sign | How it is read | What it suggests |
+|---|---|---|
+| The mesh rates a link poor | a router's Link Status: the cost it measures to each neighbour, both ways, from 1 (excellent) to 7 (very poor) | a weak router-to-router link, as the routers themselves see it |
+| Delivery failures reported | a router's Network Status command: it could not deliver (link failure, many-to-one route failure…), and about which device | a broken route, often to a battery device whose link to its parent is weak |
+| Repeated rejoins | Rejoin Response commands for the same device | a device that keeps losing its parent |
+
+Every network command gets its real name in the log, replacing the guess made from the frame's shape: route requests and replies (with the path cost accumulated so far), route records and their relays, network status, leave, rejoin, end-device timeout. Devices also announce their manufacturer, model, power source, firmware and battery level, which names them on the map (see [Device names](#device-names)).
+
 ## Reference
 
 ```
@@ -298,7 +311,7 @@ The header decoder has no dependency beyond the standard library. Its output was
 ## Scope and privacy
 
 - **Receive only.** The sniffer firmware cannot transmit, and this tool never sends anything on the radio.
-- **What it reads.** Without a network key, only the two clear layers described above: who talks to whom, when and how much, never what is said. One exception, which is a test and not a decryption of your traffic: when a device joins a network that still uses Zigbee's well-known default link key, the key exchange of that join can be read by anyone in range, and the tool recovers the network key from it, says that the network is exposed, and keeps the key in memory. With a network key (that one, or one you enter in *Settings*; keys you save are kept in `keys.json` in your data directory, readable by you only), it decrypts the network layer and reads a few things devices say about themselves: manufacturer, model, power source and firmware (the Basic cluster), battery level, and each router's measured link costs to its neighbours. It shows nothing else from inside the messages: no commands, no sensor readings. Network commands are recognised by their shape and labelled "probable" when that is a deduction.
+- **What it reads.** Without a network key, only the two clear layers described above: who talks to whom, when and how much, never what is said. One exception, which is a test and not a decryption of your traffic: when a device joins a network that still uses Zigbee's well-known default link key, the key exchange of that join can be read by anyone in range, and the tool recovers the network key from it, says that the network is exposed, and keeps the key in memory. With a network key (that one, or one you enter in *Settings*; keys you save are kept in `keys.json` in your data directory, readable by you only), it decrypts the network layer to explain how the network works in more detail: what each network command says, routers' link costs, what devices say about themselves (manufacturer, model, power source, firmware, battery level); see [With the network key](#with-the-network-key). The network key opens everything that layer protects, application messages and sensor readings included, so treat the key, and access to this tool's pages, like access to the network itself. Without a key, network commands are recognised by their shape and labelled "probable" when that is a deduction.
 - **Local by default.** Out of the box the server listens on `127.0.0.1` and answers only requests addressed to that local address. It grants no cross-origin access, so another website cannot read anything through your browser, and it refuses any change or live connection that does not carry a token only its own page can obtain. You can make it listen on your network (`--host`): it then requires a password and checks the address each request is meant for, or, behind Home Assistant ingress, accepts only the Home Assistant supervisor. A password on a loopback bind (behind a reverse proxy) means the same sign-in. That traffic is plain HTTP, see [Running it on your LAN](#running-it-on-your-lan). The only outbound connections are the registry update, and your Hue Bridge once you set it up (see [Hue Bridge](#hue-bridge)): the first on your request, the second only to a bridge on your own network. Without a bridge set up, and in `--demo`, the tool contacts none.
 - **Your data stays out of the repository.** Device lists live in your home directory, and `*.pcap` is in `.gitignore`. A capture contains your devices' addresses: think before sharing one.
 - Traffic of a neighbouring network on the same channel is recognised by its PAN id and kept off the map. Use this on networks you own or are allowed to monitor.
