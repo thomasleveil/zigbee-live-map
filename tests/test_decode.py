@@ -170,3 +170,28 @@ def test_exchange_tells_requests_from_answers():
     assert decode.exchange(aps(0x0000, 0x0031, bytes([0x2a, 0x00]))) == {"seq": "d42", "expects": True}                                   # Mgmt_Lqi_req
     assert decode.exchange(aps(0x0000, 0x8031, bytes([0x2a, 0x00, 0, 0, 0]))) == {"seq": "d42", "expects": False}                         # Mgmt_Lqi_rsp
     assert decode.exchange({"type": "ack", "counter": 1}) is None
+
+
+def test_dissect_reads_every_layer_with_the_key_and_stops_at_security_without_it():
+    zcl = bytes([0x18, 0x07, 0x0a, 0x00, 0x00, 0x29, 0x10, 0x08])   # report: attribute 0x0000, int16, 2064
+    aps = bytes([0x00, 0x01]) + (0x0402).to_bytes(2, "little") + (0x0104).to_bytes(2, "little") + bytes([0x01, 0x21]) + zcl
+    frame = decode.build_secured_nwk(NET, seq=5, pan=0x1a62, mac_dst=0x0000, mac_src=0x72f6, nwk_dst=0x0000, nwk_src=0x72f6,
+                                     radius=30, nwk_seq=5, src64=DEV64, counter=42, payload=aps)
+    names = lambda layers: [l["layer"] for l in layers]
+    field = lambda layers, layer, name: dict(next(l for l in layers if l["layer"] == layer)["fields"])[name]
+    keyless = decode.dissect(frame)
+    assert names(keyless) == ["IEEE 802.15.4 MAC", "Zigbee NWK", "NWK security"]
+    assert field(keyless, "NWK security", "Payload") == "encrypted (no network key)"
+    keyed = decode.dissect(frame, NET)
+    assert names(keyed) == ["IEEE 802.15.4 MAC", "Zigbee NWK", "NWK security", "APS", "ZCL"]
+    assert field(keyed, "APS", "Cluster") == "0x0402 (Temperature Measurement)"
+    assert field(keyed, "ZCL", "Command") == "0x0a (Report Attributes)" and field(keyed, "ZCL", "Attributes") == "0x0000 = 2064"
+    assert names(decode.dissect(frame, bytes(16)))[-1] == "NWK security"   # wrong key: says so, goes no further
+
+
+def test_dissect_never_raises_on_cut_frames():
+    frame = decode.build_link_status(NET, pan=0x1a62, src=0x6ca5, src64=DEV64, counter=9, neighbours=[(0x0000, 1, 1)])
+    for cut in range(len(frame) + 1):
+        layers = decode.dissect(frame[:cut], NET)
+        assert layers and all(isinstance(l["fields"], list) for l in layers)
+    assert decode.dissect(frame, NET)[-1]["layer"] == "NWK command"

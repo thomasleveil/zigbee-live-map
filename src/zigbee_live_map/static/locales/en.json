@@ -76,6 +76,11 @@
   "log.radius": "radius {r}",
   "log.bytes": "{n} bytes",
   "log.retry": "retransmission",
+  "frame.title": "Frame #{n}",
+  "frame.loading": "Decoding…",
+  "frame.gone": "This frame is no longer kept by the tool (only the most recent ones are).",
+  "frame.raw": "Raw bytes ({n})",
+  "frame.keyless": "Without the network key, the encrypted part stays unread. Enter the key in Settings to see the layers inside.",
 
   "devices.aria": "Devices",
   "devices.all": "All",

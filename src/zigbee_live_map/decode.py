@@ -631,3 +631,222 @@ def build_link_status(net_key: bytes, *, pan: int, src: int, src64: int, counter
     aad = nwk + aux
     ct = crypto.ccm_star_encrypt(net_key, crypto.nonce(src64, counter, secctl), payload, aad)
     return mac + nwk + aux + ct
+
+
+# --- a frame, layer by layer, for the log's detail view ------------------------------------------
+
+PROFILES = {0x0000: "ZDO", 0x0104: "Home Automation", 0xA1E0: "Green Power", 0xC05E: "ZLL"}
+CLUSTERS = {
+    0x0000: "Basic", 0x0001: "Power Configuration", 0x0003: "Identify", 0x0004: "Groups", 0x0005: "Scenes",
+    0x0006: "On/Off", 0x0008: "Level Control", 0x000A: "Time", 0x0019: "OTA Upgrade", 0x0020: "Poll Control",
+    0x0021: "Green Power", 0x0201: "Thermostat", 0x0202: "Fan Control", 0x0204: "Thermostat UI Configuration",
+    0x0300: "Color Control", 0x0400: "Illuminance Measurement", 0x0402: "Temperature Measurement",
+    0x0403: "Pressure Measurement", 0x0405: "Relative Humidity Measurement", 0x0406: "Occupancy Sensing",
+    0x0500: "IAS Zone", 0x0702: "Metering", 0x0B04: "Electrical Measurement", 0x0B05: "Diagnostics",
+    0x1000: "Touchlink Commissioning", 0xEF00: "Tuya (manufacturer)", 0xFC11: "Sonoff (manufacturer)",
+}
+ZDO_CLUSTERS = {
+    0x0000: "NWK_addr", 0x0001: "IEEE_addr", 0x0002: "Node_Desc", 0x0003: "Power_Desc", 0x0004: "Simple_Desc",
+    0x0005: "Active_EP", 0x0006: "Match_Desc", 0x0013: "Device_annce", 0x0021: "Bind", 0x0022: "Unbind",
+    0x0031: "Mgmt_Lqi", 0x0032: "Mgmt_Rtg", 0x0033: "Mgmt_Bind", 0x0034: "Mgmt_Leave", 0x0036: "Mgmt_Permit_Joining",
+    0x0038: "Mgmt_NWK_Update",
+}
+ZCL_GLOBAL = {
+    0x00: "Read Attributes", 0x01: "Read Attributes Response", 0x02: "Write Attributes", 0x03: "Write Attributes Undivided",
+    0x04: "Write Attributes Response", 0x05: "Write Attributes No Response", 0x06: "Configure Reporting",
+    0x07: "Configure Reporting Response", 0x08: "Read Reporting Configuration", 0x09: "Read Reporting Configuration Response",
+    0x0A: "Report Attributes", 0x0B: "Default Response", 0x0C: "Discover Attributes", 0x0D: "Discover Attributes Response",
+    0x11: "Discover Commands Received", 0x12: "Discover Commands Received Response", 0x13: "Discover Commands Generated",
+    0x14: "Discover Commands Generated Response", 0x15: "Discover Attributes Extended", 0x16: "Discover Attributes Extended Response",
+}
+MAC_FRAME_TYPES = {0: "Beacon", 1: "Data", 2: "Acknowledgement", 3: "MAC command", 4: "Multipurpose", 5: "Fragment", 6: "Extended"}
+MAC_COMMAND_NAMES = {0x01: "Association Request", 0x02: "Association Response", 0x03: "Disassociation Notification",
+                     0x04: "Data Request", 0x05: "PAN ID Conflict Notification", 0x06: "Orphan Notification",
+                     0x07: "Beacon Request", 0x08: "Coordinator Realignment"}
+ADDR_MODES = {0: "none", 1: "reserved", 2: "short", 3: "extended"}
+
+
+def _hex(data: bytes) -> str:
+    return data.hex(" ")
+
+
+def _named(value: int, names: dict, width: int = 4) -> str:
+    name = names.get(value)
+    return f"0x{value:0{width}x}" + (f" ({name})" if name else "")
+
+
+def dissect(frame: bytes, network_key: bytes | None = None) -> list[dict]:
+    """The frame's layers, each {"layer", "fields": [[name, value], ...]}, as far as they can be read.
+
+    Without the key it stops at the NWK security header; with it, it decrypts and reads the NWK command or the
+    APS, ZDO and ZCL headers, and the attributes of read responses and reports. Field names are the
+    specifications' own; anything unreadable ends the walk with the remaining bytes in hex."""
+    layers: list[dict] = []
+    w = _Walk(frame)
+    try:
+        fcf = w.u16()
+        ftype, version = fcf & 7, (fcf >> 12) & 3
+        dst_mode, src_mode = (fcf >> 10) & 3, (fcf >> 14) & 3
+        mac = [["Frame type", MAC_FRAME_TYPES.get(ftype, f"reserved ({ftype})")], ["Security enabled", bool(fcf & 0x08)],
+               ["Frame pending", bool(fcf & 0x10)], ["Acknowledgement request", bool(fcf & 0x20)],
+               ["PAN ID compression", bool(fcf & 0x40)], ["Frame version", version],
+               ["Destination addressing mode", ADDR_MODES[dst_mode]], ["Source addressing mode", ADDR_MODES[src_mode]]]
+        layers.append({"layer": "IEEE 802.15.4 MAC", "fields": mac})
+        if not (version == 2 and fcf & 0x0100):
+            mac.append(["Sequence number", w.u8()])
+        if ftype == 2:
+            return layers
+        from .frames import _pan_ids   # the 2015 PAN ID compression table lives with the header decoder
+        dst_pan, src_pan = _pan_ids(version, dst_mode, src_mode, bool(fcf & 0x40))
+        addr = lambda mode: f"0x{w.u16():04x}" if mode == 2 else ":".join(f"{b:02x}" for b in reversed(w.take(8)))
+        if dst_pan:
+            mac.append(["Destination PAN", f"0x{w.u16():04x}"])
+        if dst_mode:
+            mac.append(["Destination", addr(dst_mode)])
+        if src_pan:
+            mac.append(["Source PAN", f"0x{w.u16():04x}"])
+        if src_mode:
+            mac.append(["Source", addr(src_mode)])
+        if fcf & 0x08 or ftype not in (0, 1, 3):
+            layers.append({"layer": "Not decoded", "fields": [["Bytes", _hex(frame[w.pos:])]]})
+            return layers
+        if ftype == 3:
+            cmd = w.u8()
+            fields = [["Command", _named(cmd, MAC_COMMAND_NAMES, 2)]]
+            if w.pos < len(frame):
+                fields.append(["Payload", _hex(frame[w.pos:])])
+            layers.append({"layer": "MAC command", "fields": fields})
+            return layers
+        if ftype == 0:
+            layers.append({"layer": "Beacon", "fields": [["Payload", _hex(frame[w.pos:])]]})
+            return layers
+        if w.pos >= len(frame):
+            layers.append({"layer": "Data", "fields": [["Payload", "empty (the parent had nothing for the device that polled it)"]]})
+            return layers
+        _dissect_nwk(frame, w, layers, network_key)
+    except (IndexError, ValueError):
+        layers.append({"layer": "Truncated", "fields": [["Bytes left", _hex(frame[w.pos:])]]})
+    return layers
+
+
+def _dissect_nwk(frame: bytes, w: _Walk, layers: list, network_key: bytes | None) -> None:
+    first = frame[w.pos]
+    version = (first >> 2) & 0x0F
+    if version == 3:
+        w.u8()
+        fields = [["Frame type", "data" if first & 3 == 0 else "maintenance"], ["Protocol version", "3 (Green Power)"],
+                  ["Auto-commissioning", bool(first & 0x40)]]
+        if first & 0x80:
+            ext = w.u8()
+            fields += [["Application ID", ext & 7], ["Security level", (ext >> 3) & 3], ["Direction", "to GPD" if ext & 0x80 else "from GPD"]]
+        layers.append({"layer": "Green Power", "fields": fields + [["Rest", _hex(frame[w.pos:])]]})
+        return
+    nwk_start = w.pos
+    nfcf = w.u16()
+    ntype = nfcf & 3
+    nwk = [["Frame type", {0: "data", 1: "NWK command", 2: "reserved", 3: "inter-PAN"}[ntype]], ["Protocol version", version]]
+    layers.append({"layer": "Zigbee NWK", "fields": nwk})
+    if version != 2 or ntype == 2:
+        nwk.append(["Rest", _hex(frame[w.pos:])])
+        return
+    if ntype == 3:
+        layers.append({"layer": "Inter-PAN APS and payload", "fields": [["Bytes", _hex(frame[w.pos:])]]})
+        return
+    nwk += [["Discover route", (nfcf >> 6) & 3], ["Multicast", bool(nfcf & 0x0100)], ["Security", bool(nfcf & 0x0200)],
+            ["Source route", bool(nfcf & 0x0400)], ["End device initiator", bool(nfcf & 0x2000)],
+            ["Destination", f"0x{w.u16():04x}"], ["Source", f"0x{w.u16():04x}"], ["Radius", w.u8()], ["Sequence number", w.u8()]]
+    ieee = lambda: ":".join(f"{b:02x}" for b in reversed(w.take(8)))
+    if nfcf & 0x0800:
+        nwk.append(["Destination IEEE", ieee()])
+    if nfcf & 0x1000:
+        nwk.append(["Source IEEE", ieee()])
+    if nfcf & 0x0100:
+        nwk.append(["Multicast control", w.u8()])
+    if nfcf & 0x0400:
+        count = w.u8(); index = w.u8()
+        nwk.append(["Relays", ", ".join(f"0x{w.u16():04x}" for _ in range(count)) + f" (index {index})"])
+    if not nfcf & 0x0200:
+        _dissect_aps(frame[w.pos:], layers, ntype)
+        return
+    env = network_envelope(frame)
+    sec = frame[w.pos]
+    fields = [["Security level", "5 (ENC-MIC-32, sent as 0)"], ["Key identifier", {0: "data key", 1: "network key", 2: "key-transport key", 3: "key-load key"}[(sec >> 3) & 3]],
+              ["Extended nonce", bool(sec & 0x20)], ["Frame counter", env["counter"] if env else "?"]]
+    if env and env["src64"] is not None:
+        fields.append(["Source IEEE", ":".join(f"{b:02x}" for b in env["src64"].to_bytes(8, "big"))])
+    layers.append({"layer": "NWK security", "fields": fields})
+    if network_key is None:
+        fields.append(["Payload", "encrypted (no network key)"])
+        return
+    plain = decrypt_network_payload(frame, network_key)
+    if plain is None:
+        fields.append(["Payload", "the network key does not decrypt it"])
+        return
+    fields.append(["Payload", "decrypted with the network key"])
+    _dissect_aps(plain, layers, ntype)
+
+
+def _dissect_aps(payload: bytes, layers: list, ntype: int) -> None:
+    if ntype == 1:
+        cmd = nwk_command(payload)
+        fields = [["Command", f"0x{payload[0]:02x} ({cmd['name']})"]] if cmd else []
+        for k, v in (cmd or {}).get("detail", {}).items():
+            if k == "links":
+                v = ", ".join(f"{r['addr']} in {r['incoming']} out {r['outgoing']}" for r in v)
+            elif isinstance(v, list):
+                v = ", ".join(v)
+            fields.append([k, v])
+        fields.append(["Bytes", _hex(payload)])
+        layers.append({"layer": "NWK command", "fields": fields})
+        return
+    aps = aps_header(payload)
+    if aps is None:
+        layers.append({"layer": "APS", "fields": [["Bytes", _hex(payload)]]})
+        return
+    fc = payload[0]
+    fields = [["Frame type", aps["type"]], ["Delivery mode", {0: "unicast", 1: "indirect", 2: "broadcast", 3: "group"}[(fc >> 2) & 3]],
+              ["Acknowledgement request", aps["ack_req"]], ["Security (link key)", bool(fc & 0x20)], ["Extended header", bool(fc & 0x80)]]
+    profile, cluster = aps.get("profile"), aps.get("cluster")
+    if cluster is not None:
+        names = ZDO_CLUSTERS if profile == ZDO_PROFILE else CLUSTERS
+        base = names.get(cluster & 0x7FFF if profile == ZDO_PROFILE else cluster)
+        label = (base + ("_rsp" if cluster & 0x8000 else "_req") if profile == ZDO_PROFILE and base and cluster != 0x0013 else base)
+        fields += [["Cluster", f"0x{cluster:04x}" + (f" ({label})" if label else "")], ["Profile", _named(profile, PROFILES)]]
+    fields.append(["APS counter", aps["counter"]])
+    layers.append({"layer": "APS", "fields": fields})
+    body = aps.get("payload")
+    if body is None:
+        rest = "encrypted with a link key" if fc & 0x20 else ""
+        if rest:
+            layers.append({"layer": "APS payload", "fields": [["Payload", rest]]})
+        return
+    if profile == ZDO_PROFILE:
+        z = [["Transaction sequence", body[0] if body else "?"], ["Bytes", _hex(body[1:])]]
+        if cluster == MGMT_LQI_RSP:
+            table = mgmt_lqi(body)
+            if table:
+                z.insert(1, ["Neighbours", "; ".join(f"{r['addr']} {r['type']} {r['rel']} LQI {r['lqi']}" for r in table["rows"])])
+        layers.append({"layer": "ZDO", "fields": z})
+        return
+    _dissect_zcl(body, layers)
+
+
+def _dissect_zcl(body: bytes, layers: list) -> None:
+    if len(body) < 3:
+        layers.append({"layer": "ZCL", "fields": [["Bytes", _hex(body)]]})
+        return
+    fc = body[0]
+    head = 5 if fc & 0x04 else 3
+    is_global = fc & 3 == 0
+    command = body[head - 1]
+    fields = [["Frame type", "global" if is_global else "cluster-specific"], ["Direction", "server to client" if fc & 0x08 else "client to server"],
+              ["Disable default response", bool(fc & 0x10)]]
+    if fc & 0x04:
+        fields.append(["Manufacturer code", f"0x{int.from_bytes(body[1:3], 'little'):04x}"])
+    fields += [["Transaction sequence", body[head - 2]], ["Command", _named(command, ZCL_GLOBAL, 2) if is_global else f"0x{command:02x}"]]
+    if is_global and command in (0x01, 0x0A):
+        values = _zcl_values(body)
+        if values:
+            fields.append(["Attributes", "; ".join(f"0x{k:04x} = {v}" for k, v in values.items())])
+    fields.append(["Payload", _hex(body[head:]) or "none"])
+    layers.append({"layer": "ZCL", "fields": fields})

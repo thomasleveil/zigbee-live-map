@@ -73,6 +73,16 @@
 #log { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; }
 #log li { padding: .45rem .8rem; border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent); }
 #log li.fresh { animation: fresh 1.2s ease-out; }
+#log li { cursor: pointer; }
+#log li:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+dialog.frame { width: min(46rem, calc(100vw - 2rem)); }
+dialog.frame .summary { margin: 0 0 .8rem; }
+dialog.frame section { margin: 0 0 .9rem; }
+dialog.frame h3 { font-size: 1rem; margin: 0 0 .3rem; }
+dialog.frame dl { display: grid; grid-template-columns: minmax(9rem, max-content) 1fr; gap: .15rem .9rem; margin: 0; }
+dialog.frame dt { color: var(--muted); }
+dialog.frame dd { margin: 0; font-family: ui-monospace, Menlo, monospace; font-size: .92rem; overflow-wrap: anywhere; }
+dialog.frame .hex { font-family: ui-monospace, Menlo, monospace; font-size: .9rem; overflow-wrap: anywhere; padding: .4rem .5rem; background: var(--panel2); border: 1px solid var(--line); border-radius: 5px; }
 @keyframes fresh { from { background: color-mix(in srgb, var(--accent) 22%, transparent); } to { background: transparent; } }
 #log .l1 { display: flex; flex-wrap: wrap; gap: .3rem .6rem; align-items: center; }
 #log time, #log .hop, #log .l3 { font-family: ui-monospace, Menlo, monospace; font-size: .85rem; }
@@ -448,6 +458,7 @@ function rowFor(e) {
   const time = d.toLocaleTimeString(ZLM.lang, { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0");
   const li = document.createElement("li");
   const l3 = [e.ns ? t("log.nwk", { src: e.ns, dst: e.nd }) : null, e.r != null ? t("log.radius", { r: e.r }) : null, t("log.bytes", { n: e.len }), e.rssi != null ? `${e.rssi} dBm` : null, e.rt ? t("log.retry") : null].filter(Boolean).join(" · ");
+  li.dataset.n = e.n; li.tabIndex = 0; li.setAttribute("aria-haspopup", "dialog");
   li.innerHTML = `<div class="l1"><time>${time}</time>${chip(e.cat)}<span class="hop">${esc(ms || "?")} → ${esc(BROADCAST.has(md) ? t("common.everyone") : (md || "?"))}</span></div><div class="l2">${esc(explain(e))}</div><div class="l3">${esc(l3)}</div>`;
   return li;
 }
@@ -950,6 +961,39 @@ ZLM.setExtras(box => {
   input.addEventListener("change", () => { animOn = input.checked; prefs.set("anim", animOn ? null : "off"); });
 });
 $("btnSettings").addEventListener("click", () => ZLM.openSettings());
+
+// ------------------------------------------------------------------ frame detail dialog
+// A log line opens the frame it describes, layer by layer: the server keeps the raw frames of its backlog and decodes one on
+// request, decrypting it when the network key is known. Field names are the specifications' own, as in a protocol analyser.
+let frameDialog = null;
+function buildFrameDialog() {
+  frameDialog = document.createElement("dialog");
+  frameDialog.className = "settings frame"; frameDialog.setAttribute("aria-labelledby", "frameTitle");
+  frameDialog.innerHTML = `<header><h2 id="frameTitle"></h2><button type="button" id="frameClose" data-i18n-aria="settings.close">×</button></header><div class="body" id="frameBody"></div>`;
+  document.body.appendChild(frameDialog);
+  frameDialog.querySelector("#frameClose").addEventListener("click", () => frameDialog.close());
+  frameDialog.addEventListener("click", ev => { if (ev.target === frameDialog) frameDialog.close(); });
+}
+async function openFrame(n) {
+  const e = S.events.find(x => x.n === n);
+  if (!frameDialog) buildFrameDialog();
+  ZLM.translate(frameDialog);
+  frameDialog.querySelector("#frameTitle").textContent = t("frame.title", { n });
+  const body = frameDialog.querySelector("#frameBody");
+  const summary = e ? `<p class="summary">${chip(e.cat)} ${esc(explain(e))}</p>` : "";
+  body.innerHTML = summary + `<p class="note" role="status">${esc(t("frame.loading"))}</p>`;
+  if (!frameDialog.open) frameDialog.showModal();
+  let d;
+  try { d = await ZLM.getJson(`api/frames/${n}`); }
+  catch (err) { body.innerHTML = summary + `<p class="note" role="status">${esc(t("frame.gone"))}</p>`; return; }
+  const value = v => v === true ? t("common.yes") : v === false ? t("common.no") : String(v);
+  body.innerHTML = summary
+    + d.layers.map(l => `<section><h3>${esc(l.layer)}</h3><dl>${l.fields.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(value(v))}</dd>`).join("")}</dl></section>`).join("")
+    + `<section><h3>${esc(t("frame.raw", { n: d.hex.split(" ").length }))}</h3><div class="hex">${esc(d.hex)}</div></section>`
+    + (d.decrypted ? "" : `<p class="note">${esc(t("frame.keyless"))}</p>`);
+}
+$("log").addEventListener("click", ev => { const li = ev.target.closest("li[data-n]"); if (li && !String(getSelection())) openFrame(Number(li.dataset.n)); });
+$("log").addEventListener("keydown", ev => { const li = ev.target.closest("li[data-n]"); if (li && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); openFrame(Number(li.dataset.n)); } });
 
 // ------------------------------------------------------------------ security dialog
 let secDialog = null, secKeyMsg = "";

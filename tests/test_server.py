@@ -417,3 +417,19 @@ def test_zcl_requests_and_answers_are_marked_for_pairing(tmp_path):
         await hub.publish(secured(answer, 0x3388, 0x0000, 2), 1.04, None)
         assert hub.events[-1]["zs"] == "c6" and "zx" not in hub.events[-1]
     run(scenario, tmp_path)
+
+
+def test_a_logged_frame_can_be_opened_layer_by_layer(tmp_path):
+    async def scenario(client, hub, origin):
+        frame = decode.build_link_status(NET, pan=0x1A62, src=0x6CA5, src64=DEV64, counter=9, neighbours=[(0x0000, 1, 1)])
+        await hub.publish(frame, 1.0, None)
+        n = hub.events[-1]["n"]
+        resp = await client.get(f"/api/frames/{n}", headers=origin)
+        body = await resp.json()
+        assert resp.status == 200 and body["decrypted"] is False and body["hex"] == frame.hex(" ")
+        assert [l["layer"] for l in body["layers"]][-1] == "NWK security"
+        hub.network_key = NET
+        body = await (await client.get(f"/api/frames/{n}", headers=origin)).json()
+        assert body["layers"][-1]["layer"] == "NWK command"
+        assert (await client.get("/api/frames/999999", headers=origin)).status == 404
+    run(scenario, tmp_path)

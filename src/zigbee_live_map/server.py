@@ -127,6 +127,9 @@ class Hub:
         self._dongle_logged: tuple | None = None   # the dongle state last written to the log, and whether it was ever read (see log_dongle)
         self._dongle_was_read = False
         self.events: deque = deque(maxlen=backlog)
+        self.frames: dict[int, bytes] = {}   # event number -> the raw frame, for the log's detail view; as many as the backlog
+        self._frame_order: deque = deque()
+        self._frame_cap = backlog
         self.clients: set[web.WebSocketResponse] = set()
         self.classifier = Classifier()
         self._names_sent: str | None = None   # what the pages were last sent as `names` and as `hue` (as JSON, to compare): a read that
@@ -211,6 +214,10 @@ class Hub:
     async def publish(self, frame: bytes, ts: float, rssi: int | None) -> None:
         event = self.classifier.event(frame, ts, rssi)
         self.events.append(event)
+        self.frames[event["n"]] = frame
+        self._frame_order.append(event["n"])
+        while len(self._frame_order) > self._frame_cap:
+            self.frames.pop(self._frame_order.popleft(), None)
         pan = event.get("pan")
         if pan and pan != "0xffff":
             self._pan_counts[pan] = self._pan_counts.get(pan, 0) + 1
@@ -384,6 +391,8 @@ class Hub:
         self.generation += 1
         self.info["channel"] = channel
         self.events.clear()
+        self.frames.clear()   # numbering restarts with the new classifier
+        self._frame_order.clear()
         self.heard.clear()
         self.classifier = Classifier()
         # A new channel is a new network: drop the per-network verdict, key and PAN; a saved key re-applies per PAN.
@@ -887,6 +896,20 @@ async def api_hue_forget(request: web.Request) -> web.Response:
     return web.json_response(await request.app[HUB].hue.forget())
 
 
+async def api_frame(request: web.Request) -> web.Response:
+    """One frame of the backlog, layer by layer, decrypted when the network key is known."""
+    hub: Hub = request.app[HUB]
+    try:
+        n = int(request.match_info["n"])
+    except ValueError:
+        raise web.HTTPBadRequest(text=json.dumps({"error": "not a frame number"}), content_type="application/json")
+    frame = hub.frames.get(n)
+    if frame is None:
+        raise web.HTTPNotFound(text=json.dumps({"error": "this frame is no longer kept"}), content_type="application/json")
+    return web.json_response({"n": n, "hex": frame.hex(" "), "decrypted": hub.network_key is not None,
+                              "layers": decode.dissect(frame, hub.network_key)})
+
+
 async def api_vendors(request: web.Request) -> web.Response:
     return web.json_response(request.app[HUB].registry.meta)
 
@@ -962,7 +985,7 @@ def build_app(hub: Hub, access: Access | None = None, clock=time.monotonic) -> w
         web.patch("/api/lists/{list}", api_list_update), web.delete("/api/lists/{list}", api_list_delete),
         web.put("/api/lists/{list}/devices/{ieee}", api_device_set), web.delete("/api/lists/{list}/devices/{ieee}", api_device_delete),
         web.post("/api/lists/{list}/fill-identities", api_fill), web.post("/api/lists/{list}/import", api_import), web.get("/api/lists/{list}/export", api_export),
-        web.get("/api/session", api_session), web.get("/api/vendors", api_vendors), web.post("/api/vendors/refresh", api_vendors_refresh),
+        web.get("/api/session", api_session), web.get("/api/frames/{n}", api_frame), web.get("/api/vendors", api_vendors), web.post("/api/vendors/refresh", api_vendors_refresh),
         web.get("/api/keys", api_keys), web.put("/api/keys/{pan}", api_keys_set), web.delete("/api/keys/{pan}", api_keys_delete),
         web.get("/api/hue", api_hue), web.delete("/api/hue", api_hue_forget), web.post("/api/hue/discover", api_hue_discover),
         web.post("/api/hue/pair", api_hue_pair), web.post("/api/hue/key", api_hue_key), web.post("/api/hue/refresh", api_hue_refresh),

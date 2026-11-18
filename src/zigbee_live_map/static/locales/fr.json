@@ -76,6 +76,11 @@
   "log.radius": "rayon {r}",
   "log.bytes": "{n} octets",
   "log.retry": "retransmission",
+  "frame.title": "Trame n° {n}",
+  "frame.loading": "Décodage…",
+  "frame.gone": "L'outil ne garde plus cette trame (seules les plus récentes le sont).",
+  "frame.raw": "Octets bruts ({n})",
+  "frame.keyless": "Sans la clé réseau, la partie chiffrée reste illisible. Renseigne la clé dans les Réglages pour voir les couches qu'elle contient.",
 
   "devices.aria": "Appareils",
   "devices.all": "Tous",
