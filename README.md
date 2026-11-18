@@ -263,6 +263,7 @@ The measurements the devices keep to themselves travel inside the encrypted netw
 | Repeated rejoins | Rejoin Response commands for the same device | a device that keeps losing its parent |
 | Weak link to an end device | a router's neighbour table (Mgmt_Lqi_rsp, which a hub such as Home Assistant requests when it scans the topology): the LQI at which it receives each neighbour, end devices included | a battery device poorly heard by its parent; Link Status does not cover these links |
 | Messages not confirmed end to end | APS acknowledgements: a message sent in acknowledged mode, and the acknowledgement its final recipient sends back | a device that does not get its messages, whatever the individual hops say |
+| Requests left unanswered | ZCL commands that expect a reply (read or write an attribute, a command without "no default response") and ZDO requests, paired with the answer that comes back by transaction sequence number | a device that does not get, or cannot answer, what the hub asks it; works for messages sent without an APS acknowledgement |
 
 LQI is vendor-specific (0-255, higher is better). The thresholds the tool uses come from comparing LQI with Link Status costs on a real network: cost 1 at LQI 117 and above, cost 5 or worse at 47 and below. Delays of acknowledgements are as precise as the sniffer's USB timing, a few milliseconds.
 

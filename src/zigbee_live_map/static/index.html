@@ -230,7 +230,7 @@ const newFocus = () => ({ polls: 0, relayed: 0, rebroadcast: 0, beacon: null, jo
 function reset() {
   S = { pans: {}, hint: new Map(), nodes: new Map(), links: new Map(), pairs: new Map(), waiting: new Map(), lastHandover: null, sweptAt: 0, ghostsAt: 0, events: [], counts: {},
         ieee2addr: new Map(), nwkFail: new Map(), rejoins: new Map(), names: {}, vendors: {}, focusIeee: null, focusAddr: null, total: 0, recent: [], pan: null, mode: "live", channel: null, canTune: false, haApp: false, focus: newFocus(),
-        security: { vulnerable: false, secureJoinSeen: false, keyKnown: false, keySource: null, key: null }, identities: {}, costs: {}, batteries: {}, neighbors: {}, e2e: new Map(), apsWait: new Map(), apsSweptAt: 0,
+        security: { vulnerable: false, secureJoinSeen: false, keyKnown: false, keySource: null, key: null }, identities: {}, costs: {}, batteries: {}, neighbors: {}, e2e: new Map(), apsWait: new Map(), apsSweptAt: 0, answers: new Map(), askWait: new Map(), askSweptAt: 0,
         hue: { configured: false, devices: {} } };
   parts.length = 0; rings.length = 0;
 }
@@ -338,6 +338,20 @@ function trackAps(e) {
   S.apsSweptAt = e.t;
   for (const [k, t0] of S.apsWait) if (e.t - t0 > APS_ACK_WAIT_S) { S.apsWait.delete(k); const [a, b] = k.split("|"); e2e(a, b).lost++; }
 }
+// Requests (ZCL commands that expect a reply, ZDO requests) and the answers their recipients send back, paired by
+// transaction sequence number. Unlike APS acknowledgements, this works for messages sent without one.
+const answers = (a, b) => { const k = `${a}>${b}`; let s = S.answers.get(k); if (!s) { s = { a, b, asked: 0, answered: 0, lost: 0, rtt: 0 }; S.answers.set(k, s); } return s; };
+function trackExchange(e) {
+  const back = `${e.nd}|${e.ns}|${e.zs}`, t0 = S.askWait.get(back);
+  if (t0 != null) { S.askWait.delete(back); const s = answers(e.nd, e.ns); s.answered++; s.rtt += e.t - t0; e.zrt = Math.round((e.t - t0) * 1000); }
+  else if (e.zx && !BROADCAST.has(e.nd)) {
+    const k = `${e.ns}|${e.nd}|${e.zs}`;
+    if (!S.askWait.has(k)) { S.askWait.set(k, e.t); answers(e.ns, e.nd).asked++; }
+  }
+  if (e.t - S.askSweptAt < 1) return;
+  S.askSweptAt = e.t;
+  for (const [k, t0] of S.askWait) if (e.t - t0 > APS_ACK_WAIT_S) { S.askWait.delete(k); const [a, b] = k.split("|"); answers(a, b).lost++; }
+}
 function sweepGhosts(now) {
   if (now - S.ghostsAt < 1) return;
   S.ghostsAt = now;
@@ -385,6 +399,7 @@ function processEvent(e, live) {
   if (e.nc === "rejoin_response" && e.nx && e.nx.status === 0) S.rejoins.set(e.nx.addr, (S.rejoins.get(e.nx.addr) || 0) + 1);   // it had lost its parent
   if (e.cat === "ack" && ms) { const w = S.waiting.get(S.lastHandover); if (w && w.router === ms && w.from === md) w.acked = true; }
   if (e.ap && e.ns && e.nd) trackAps(e);
+  if (e.zs && e.ns && e.nd) trackExchange(e);
   sweepGhosts(e.t);
   tallyFocus(e, ms, md);
   if (live) { if (!hidden.has(e.cat)) spawn(e, ms, md, toAll); logLive(e); }
@@ -409,7 +424,7 @@ function explain(e) {
     default: text = ZLM.has("explain." + e.cat) ? t("explain." + e.cat, v) : catLearn(e.cat);
   }
   const aps = e.ap === "ack" ? " " + t(e.rtt != null ? "apsx.ack.rtt" : "apsx.ack", { ms: e.rtt }) : e.ap === "req" ? " " + t("apsx.req") : "";
-  const zdo = e.zd === "mgmt_lqi" ? " " + t("apsx.mgmt_lqi") : "";
+  const zdo = (e.zd === "mgmt_lqi" ? " " + t("apsx.mgmt_lqi") : "") + (e.zrt != null ? " " + t("zclx.answer", { ms: e.zrt }) : "");
   return text + (e.nx ? nwkDetail(e.nc, e.nx) : "") + aps + zdo + (e.rt ? t("explain.retry") : "");
 }
 // What a decrypted network command says (the server reads it only when it has the network key).
@@ -775,6 +790,8 @@ function renderCard() {
     batt ? [c("battery"), batt.percent != null ? `${batt.percent} %` : `${batt.volts} V`] : null].filter(Boolean);
   const out = [...S.e2e.values()].filter(s => s.a === sel), sent = out.reduce((n, s) => n + s.acked + s.lost, 0), acked = out.reduce((n, s) => n + s.acked, 0);
   if (sent) keyed.push([c("e2e"), t("card.e2eValue", { acked, total: sent, pct: Math.round(100 * acked / sent), ms: acked ? Math.round(1000 * out.reduce((n, s) => n + s.rtt, 0) / acked) : "?" })]);
+  const asked = [...S.answers.values()].filter(s => s.b === sel), askedN = asked.reduce((n, s) => n + s.answered + s.lost, 0), answeredN = asked.reduce((n, s) => n + s.answered, 0);
+  if (askedN) keyed.push([c("answers"), t("card.answersValue", { answered: answeredN, total: askedN, pct: Math.round(100 * answeredN / askedN), ms: answeredN ? Math.round(1000 * asked.reduce((n, s) => n + s.rtt, 0) / answeredN) : "?" })]);
   const nbRows = (S.neighbors[sel] || []).slice().sort((a, b) => a.lqi - b.lqi);
   const neighbours = nbRows.map(r => `<li><span>${esc(label(r.addr))} · ${esc(t("rel." + r.rel))}</span><span class="${r.lqi < LQI_POOR ? "hi" : ""}">LQI ${r.lqi}</span></li>`).join("");
   const costRows = S.costs[sel] || [];
@@ -832,6 +849,10 @@ function findIssues() {
     if (!(r.rel === "child" || r.rel === "parent")) continue;
     lqiSeen.add(k);
     out.push({ weight: 4.8 + (LQI_POOR - r.lqi) / 500, node: addr, text: t("issues.lqi", { a: label(addr), b: label(r.addr), lqi: r.lqi }) });
+  }
+  for (const s of S.answers.values()) {
+    const done = s.answered + s.lost;
+    if (done >= E2E_MIN && s.answered / done < .9) out.push({ weight: 4.7 + (1 - s.answered / done) / 2, node: s.b, text: t("issues.answers", { a: label(s.a), b: label(s.b), pct: Math.round(100 * s.answered / done), answered: s.answered, total: done }) });
   }
   for (const s of S.e2e.values()) {
     const done = s.acked + s.lost;

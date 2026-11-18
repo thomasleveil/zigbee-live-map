@@ -157,3 +157,16 @@ def test_aps_header_reads_data_acknowledgements_and_requests():
     secured = bytes([0x60, 0x01]) + (0x0006).to_bytes(2, "little") + (0x0104).to_bytes(2, "little") + bytes([0x01, 0x09]) + bytes(10)
     assert "payload" not in decode.aps_header(secured)               # link-key secured: header only
     assert decode.aps_header(bytes([0x00, 0x01, 0x02])) is None      # truncated
+
+
+def test_exchange_tells_requests_from_answers():
+    def aps(profile, cluster, payload):
+        return {"type": "data", "profile": profile, "cluster": cluster, "payload": payload}
+    assert decode.exchange(aps(0x0104, 0x0201, bytes([0x00, 0x06, 0x02, 0x12, 0x00, 0x29, 0xd0, 0x07]))) == {"seq": "c6", "expects": True}    # Write Attributes
+    assert decode.exchange(aps(0x0104, 0x0201, bytes([0x18, 0x06, 0x04, 0x00]))) == {"seq": "c6", "expects": False}                       # Write Attributes Response
+    assert decode.exchange(aps(0x0104, 0x0402, bytes([0x18, 0x09, 0x0a, 0x00, 0x00, 0x29, 0x10, 0x08]))) == {"seq": "c9", "expects": False}  # report, no default response wanted
+    assert decode.exchange(aps(0x0104, 0x0006, bytes([0x01, 0x07, 0x01]))) == {"seq": "c7", "expects": True}                              # On, default response wanted
+    assert decode.exchange(aps(0x0104, 0xfc11, bytes([0x04, 0x02, 0x11, 0x03, 0x02]))) == {"seq": "c3", "expects": True}                  # manufacturer-specific write
+    assert decode.exchange(aps(0x0000, 0x0031, bytes([0x2a, 0x00]))) == {"seq": "d42", "expects": True}                                   # Mgmt_Lqi_req
+    assert decode.exchange(aps(0x0000, 0x8031, bytes([0x2a, 0x00, 0, 0, 0]))) == {"seq": "d42", "expects": False}                         # Mgmt_Lqi_rsp
+    assert decode.exchange({"type": "ack", "counter": 1}) is None

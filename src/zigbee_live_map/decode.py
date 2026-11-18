@@ -407,6 +407,32 @@ def mgmt_lqi(zdo: bytes) -> dict | None:
         return None
 
 
+# Global ZCL commands that are themselves answers, or that never get one (Write Attributes No Response).
+ZCL_GLOBAL_NO_REPLY = {0x01, 0x04, 0x05, 0x07, 0x09, 0x0B, 0x0D, 0x12, 0x14, 0x16}
+
+
+def exchange(aps: dict) -> dict | None:
+    """The request/response bookkeeping of an APS data frame: {"seq": "c12" | "d7", "expects": bool}.
+
+    ZCL (seq prefixed "c"): a command expects a reply unless it is itself an answer or its "disable default
+    response" bit is set; the reply is any ZCL frame coming back with the same transaction sequence number
+    (ZCL § 2.4.1, § 2.5.12). ZDO (prefixed "d"): a request is a cluster below 0x8000 and its response is the
+    same cluster with bit 15 set, carrying the same transaction sequence number."""
+    payload = aps.get("payload")
+    if aps.get("type") != "data" or not payload:
+        return None
+    if aps.get("profile") == ZDO_PROFILE:
+        return {"seq": f"d{payload[0]}", "expects": aps["cluster"] < 0x8000}
+    fc = payload[0]
+    head = 5 if fc & 0x04 else 3   # a manufacturer code sits before the sequence number
+    if len(payload) < head:
+        return None
+    seq, command = payload[head - 2], payload[head - 1]
+    is_global = fc & 0x03 == 0
+    expects = not fc & 0x10 and not (is_global and command in ZCL_GLOBAL_NO_REPLY)
+    return {"seq": f"c{seq}", "expects": expects}
+
+
 def device_info(aps: dict) -> dict | None:
     """What a decrypted ZCL report says about its sender: identity (Basic) and/or battery (Power Config)."""
     if aps.get("type") != "data" or aps.get("payload") is None or aps.get("profile") == ZDO_PROFILE:

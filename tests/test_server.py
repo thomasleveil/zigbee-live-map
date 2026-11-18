@@ -400,3 +400,20 @@ def test_neighbour_tables_and_end_to_end_acknowledgements_are_read_with_the_key(
         hello = hub.hello()
         assert hello["neighbors"]["0x6ca5"][1]["lqi"] == 30
     run(scenario, tmp_path)
+
+
+def test_zcl_requests_and_answers_are_marked_for_pairing(tmp_path):
+    def secured(payload, src, dst, counter):
+        return decode.build_secured_nwk(NET, seq=counter, pan=0x1A62, mac_dst=dst, mac_src=src, nwk_dst=dst, nwk_src=src,
+                                        radius=30, nwk_seq=counter, src64=DEV64, counter=counter, payload=payload)
+    head = lambda: (0x0201).to_bytes(2, "little") + (0x0104).to_bytes(2, "little") + bytes([0x01])
+
+    async def scenario(client, hub, origin):
+        hub.network_key = NET
+        write = bytes([0x00, 0x01]) + head() + bytes([0x05]) + bytes([0x00, 0x06, 0x02, 0x12, 0x00, 0x29, 0xd0, 0x07])
+        await hub.publish(secured(write, 0x0000, 0x3388, 1), 1.0, None)
+        assert (hub.events[-1]["zs"], hub.events[-1]["zx"]) == ("c6", 1)
+        answer = bytes([0x00, 0x01]) + head() + bytes([0x09]) + bytes([0x18, 0x06, 0x04, 0x00])
+        await hub.publish(secured(answer, 0x3388, 0x0000, 2), 1.04, None)
+        assert hub.events[-1]["zs"] == "c6" and "zx" not in hub.events[-1]
+    run(scenario, tmp_path)

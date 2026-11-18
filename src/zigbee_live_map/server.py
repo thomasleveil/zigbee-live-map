@@ -298,6 +298,12 @@ class Hub:
             # End-to-end acknowledgements: the page matches each acknowledgement to the message it confirms.
             if aps["type"] == "ack" or (aps["type"] == "data" and aps["ack_req"]):
                 event["ap"], event["ac"] = ("ack" if aps["type"] == "ack" else "req"), aps["counter"]
+            # Requests and the answers that come back (ZCL and ZDO): the page pairs them by sequence number.
+            ex = decode.exchange(aps)
+            if ex is not None:
+                event["zs"] = ex["seq"]
+                if ex["expects"]:
+                    event["zx"] = 1
             if aps["type"] == "data" and aps.get("profile") == decode.ZDO_PROFILE and aps.get("cluster") == decode.MGMT_LQI_RSP:
                 table = decode.mgmt_lqi(aps.get("payload") or b"")
                 if table is not None:
