@@ -433,3 +433,27 @@ def test_a_logged_frame_can_be_opened_layer_by_layer(tmp_path):
         assert body["layers"][-1]["layer"] == "NWK command"
         assert (await client.get("/api/frames/999999", headers=origin)).status == 404
     run(scenario, tmp_path)
+
+
+def test_a_channel_change_forgets_everything_the_previous_network_revealed(tmp_path):
+    class Source:
+        tuned = None
+
+        def set_channel(self, channel, generation):
+            self.tuned = (channel, generation)
+
+    async def scenario(client, hub, origin):
+        hub.source, hub.info["channel"] = Source(), 15
+        await hub.use_key(NET, "touchlink")
+        hub.vulnerable = hub.secure_join_seen = hub.touchlink_recovered = True
+        hub.pan = "0x1a62"
+        for table in (hub.identities, hub.link_quality, hub.batteries, hub.neighbors):
+            table["0x0001"] = {}
+        await hub.tune(20)
+        assert hub.source.tuned == (20, 1) and hub.info["channel"] == 20
+        assert hub.network_key is None and hub.key_source is None and hub.pan is None
+        assert not (hub.vulnerable or hub.secure_join_seen or hub.touchlink_recovered)
+        assert not (hub.identities or hub.link_quality or hub.batteries or hub.neighbors)
+        assert hub.security_state()["touchlinkRecovered"] is False
+
+    run(scenario, tmp_path)

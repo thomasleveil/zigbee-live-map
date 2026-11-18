@@ -187,12 +187,19 @@ class Hub:
         """When the live PAN has a key saved from a previous session, decrypt with it automatically."""
         saved = self.keys.get(self.pan)
         if saved and saved != self.network_key and self.key_source in (None, "saved"):
-            self.network_key, self.key_source = saved, "saved"
-            self.identities.clear()
-            self.link_quality.clear()
-            self.batteries.clear()
-            self.neighbors.clear()
-            await self.send_security()
+            await self.use_key(saved, "saved")
+
+    def _forget_decrypted(self) -> None:
+        """Drop everything that was read with a network key: it goes with the key, the channel or the network."""
+        for table in (self.identities, self.link_quality, self.batteries, self.neighbors):
+            table.clear()
+
+    async def use_key(self, key: bytes | None, source: str | None) -> None:
+        """Decrypt with this network key from now on (None: stop decrypting). What the previous key revealed is
+        dropped, and the pages are told."""
+        self.network_key, self.key_source = key, source
+        self._forget_decrypted()
+        await self.send_security()
 
     async def send_security(self) -> None:
         await self.send_all({"type": "security", **self.security_state()})
@@ -396,11 +403,9 @@ class Hub:
         self.heard.clear()
         self.classifier = Classifier()
         # A new channel is a new network: drop the per-network verdict, key and PAN; a saved key re-applies per PAN.
-        self.vulnerable = self.secure_join_seen = False
-        self.identities.clear()
-        self.link_quality.clear()
-        self.batteries.clear()
-        self.neighbors.clear()
+        self.vulnerable = self.secure_join_seen = self.touchlink_recovered = False
+        self._zll_response_ids.clear()
+        self._forget_decrypted()
         self.pan = None
         self._pan_counts.clear()
         self.network_key = self.key_source = None
@@ -843,12 +848,7 @@ async def api_keys_set(request: web.Request) -> web.Response:
         raise DeviceError(f"that is {name}, a link key, not a network key")
     pan = hub.keys.set(request.match_info["pan"], key.hex(), data.get("label", ""))
     if pan == (hub.pan or ""):   # a key for the network on the air now: start decrypting with it
-        hub.network_key, hub.key_source = key, "saved"
-        hub.identities.clear()
-        hub.link_quality.clear()
-        hub.batteries.clear()
-        hub.neighbors.clear()
-        await hub.send_security()
+        await hub.use_key(key, "saved")
     return web.json_response({"keys": hub.keys.describe(), "pan": hub.pan, "security": hub.security_state()})
 
 
@@ -857,12 +857,7 @@ async def api_keys_delete(request: web.Request) -> web.Response:
     pan = keystore.normalise_pan(request.match_info["pan"])
     hub.keys.delete(pan)
     if pan == (hub.pan or "") and hub.key_source == "saved":
-        hub.network_key = hub.key_source = None
-        hub.identities.clear()
-        hub.link_quality.clear()
-        hub.batteries.clear()
-        hub.neighbors.clear()
-        await hub.send_security()
+        await hub.use_key(None, None)
     return web.json_response({"keys": hub.keys.describe(), "pan": hub.pan, "security": hub.security_state()})
 
 
