@@ -7,6 +7,10 @@ names are the specifications' own; ZCL values are raw, without units or scaling.
 
 from __future__ import annotations
 
+import struct
+
+from hue_zigbee_encoding import HUE_LIGHT_EFFECT_CLUSTER_ID, HUE_VENDOR_ID, HueLightUpdateMessage
+
 from . import decode, wire
 
 PROFILES = {0x0000: "ZDO", 0x0104: "Home Automation", 0xA1E0: "Green Power", 0xC05E: "ZLL"}
@@ -19,6 +23,12 @@ CLUSTERS = {
     0x0500: "IAS Zone", 0x0702: "Metering", 0x0B04: "Electrical Measurement", 0x0B05: "Diagnostics",
     0x1000: "Touchlink Commissioning", 0xEF00: "Tuya (manufacturer)", 0xFC11: "Sonoff (manufacturer)",
 }
+# The ids from 0xFC00 up belong to no one: each manufacturer uses them as it likes (0xFC03 is a light control for
+# Signify and an air-quality measurement for Develco). Such a cluster has a name only with its manufacturer code,
+# which travels in the ZCL header of manufacturer-specific frames.
+MANUFACTURERS = {HUE_VENDOR_ID: "Signify, Philips Hue"}
+MANUFACTURER_CLUSTERS = {(HUE_VENDOR_ID, HUE_LIGHT_EFFECT_CLUSTER_ID): "Philips Hue light control"}
+HUE_LIGHT_UPDATE = 0x00   # the one command of the Hue light control cluster, sent to the light ("multicolor" in ZHA's quirks)
 ZDO_CLUSTERS = {
     0x0000: "NWK_addr", 0x0001: "IEEE_addr", 0x0002: "Node_Desc", 0x0003: "Power_Desc", 0x0004: "Simple_Desc",
     0x0005: "Active_EP", 0x0006: "Match_Desc", 0x0013: "Device_annce", 0x0021: "Bind", 0x0022: "Unbind",
@@ -185,11 +195,12 @@ def _dissect_nwk_payload(payload: bytes, layers: list, ntype: int) -> None:
     fields = [["Frame type", aps["type"]], ["Delivery mode", APS_DELIVERY[(fc >> 2) & 3]],
               ["Acknowledgement request", aps["ack_req"]], ["Security (link key)", bool(fc & 0x20)], ["Extended header", bool(fc & 0x80)]]
     profile, cluster = aps.get("profile"), aps.get("cluster")
+    body = aps.get("payload")
+    zcl = decode.zcl_header(body) if body is not None and profile != decode.ZDO_PROFILE else None
     if cluster is not None:
-        fields += [["Cluster", _cluster_text(profile, cluster)], ["Profile", _named(profile, PROFILES)]]
+        fields += [["Cluster", _cluster_text(profile, cluster, zcl["manufacturer"] if zcl else None)], ["Profile", _named(profile, PROFILES)]]
     fields.append(["APS counter", aps["counter"]])
     layers.append({"layer": "APS", "fields": fields})
-    body = aps.get("payload")
     if body is None:
         if fc & 0x20:
             layers.append({"layer": "APS payload", "fields": [["Payload", "encrypted with a link key"]]})
@@ -202,21 +213,20 @@ def _dissect_nwk_payload(payload: bytes, layers: list, ntype: int) -> None:
                 z.insert(1, ["Neighbours", "; ".join(f"{r['addr']} {r['type']} {r['rel']} LQI {r['lqi']}" for r in table["rows"])])
         layers.append({"layer": "ZDO", "fields": z})
         return
-    _dissect_zcl(body, layers)
+    _dissect_zcl(body, zcl, cluster, layers)
 
 
-def _cluster_text(profile: int, cluster: int) -> str:
+def _cluster_text(profile: int, cluster: int, manufacturer: int | None = None) -> str:
     """A cluster id with its name. A ZDO cluster is a request, or the same id with bit 15 set for its response."""
     if profile != decode.ZDO_PROFILE:
-        return _named(cluster, CLUSTERS)
+        return _named(cluster, {cluster: MANUFACTURER_CLUSTERS.get((manufacturer, cluster)) or CLUSTERS.get(cluster)})
     base = ZDO_CLUSTERS.get(cluster & 0x7FFF)
     if base and cluster != 0x0013:   # Device_annce is neither a request nor a response
         base += "_rsp" if cluster & 0x8000 else "_req"
     return f"0x{cluster:04x}" + (f" ({base})" if base else "")
 
 
-def _dissect_zcl(body: bytes, layers: list) -> None:
-    zcl = decode.zcl_header(body)
+def _dissect_zcl(body: bytes, zcl: dict | None, cluster: int | None, layers: list) -> None:
     if zcl is None:
         layers.append({"layer": "ZCL", "fields": [["Bytes", _hex(body)]]})
         return
@@ -225,10 +235,48 @@ def _dissect_zcl(body: bytes, layers: list) -> None:
               ["Direction", "server to client" if fc & 0x08 else "client to server"],
               ["Disable default response", bool(fc & 0x10)]]
     if zcl["manufacturer"] is not None:
-        fields.append(["Manufacturer code", f"0x{zcl['manufacturer']:04x}"])
-    fields += [["Transaction sequence", zcl["seq"]], ["Command", _named(command, ZCL_GLOBAL, 2) if zcl["global"] else f"0x{command:02x}"]]
+        fields.append(["Manufacturer code", _named(zcl["manufacturer"], MANUFACTURERS)])
+    hue_update = (zcl["manufacturer"], cluster) == (HUE_VENDOR_ID, HUE_LIGHT_EFFECT_CLUSTER_ID) and not zcl["global"] and command == HUE_LIGHT_UPDATE
+    names = ZCL_GLOBAL if zcl["global"] else {HUE_LIGHT_UPDATE: "Light update"} if hue_update else {}
+    fields += [["Transaction sequence", zcl["seq"]], ["Command", _named(command, names, 2)]]
     values = decode.zcl_values(body)
     if values:
         fields.append(["Attributes", "; ".join(f"0x{k:04x} = {v}" for k, v in values.items())])
     fields.append(["Payload", _hex(zcl["body"]) or "none"])
     layers.append({"layer": "ZCL", "fields": fields})
+    if hue_update:
+        layers.append({"layer": "Philips Hue light update", "fields": _hue_light_update(zcl["body"])})
+
+
+def _hue_light_update(data: bytes) -> list[list]:
+    """What a Hue hub asks of a light in one message: any subset of on/off, brightness, colour, transition, effect
+    and, for a strip, its gradient. The format is Signify's own, reverse-engineered by Christian Iversen
+    (github.com/chrivers/bifrost, doc/hue-zigbee-format.md); the hue-zigbee-encoding library reads it."""
+    try:
+        update = HueLightUpdateMessage.from_bytes(data)
+    except (ValueError, IndexError, struct.error) as exc:
+        return [["Not decoded", str(exc) or "the message is cut short"]]
+    xy = lambda c: f"({c.x:.4f}, {c.y:.4f})"   # noqa: E731
+    fields: list[list] = []
+    if update.is_on is not None:
+        fields.append(["On", update.is_on])
+    if update.brightness is not None:
+        fields.append(["Brightness", f"{update.brightness} of 254"])
+    if update.color_temp is not None:
+        mired = update.color_temp.mired
+        fields.append(["Colour temperature", f"{mired} mired" + (f" ({round(1_000_000 / mired)} K)" if mired else "")])
+    if update.color_xy is not None:
+        fields.append(["Colour (CIE xy)", xy(update.color_xy)])
+    if update.transition_time is not None:
+        fields.append(["Transition time", update.transition_time])
+    if update.effect is not None:
+        fields.append(["Effect", update.effect.name.lower()])
+    if update.effect_speed is not None:
+        fields.append(["Effect speed", f"{update.effect_speed} of 255"])
+    if update.gradient is not None:
+        fields.append(["Gradient style", update.gradient.style.name.lower()])
+        fields.append(["Gradient colours (CIE xy)", ", ".join(xy(c) for c in update.gradient.colors)])
+    if update.gradient_params is not None:
+        fields.append(["Gradient scale", update.gradient_params.scale])
+        fields.append(["Gradient offset", update.gradient_params.offset])
+    return fields or [["Changes", "none"]]

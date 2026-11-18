@@ -186,3 +186,8 @@ def power_config_report(percent: int, *, src_ep: int = 1, seq: int = 1) -> bytes
     body = bytes([ZCL_FROM_SERVER, seq & 0xFF, 0x0a])   # ZCL header, seq, Report Attributes
     body += _u16(ATTR_BATTERY_PERCENT) + bytes([0x20, min(200, max(0, percent) * 2)])   # uint8, half-percent
     return _aps_data(POWER_CONFIG_CLUSTER, src_ep, seq) + body
+
+
+def manufacturer_command(cluster: int, manufacturer: int, command: int, payload: bytes, *, src_ep: int = 1, seq: int = 1) -> bytes:
+    """An APS-data payload: a manufacturer-specific command of a cluster, sent to the device (client to server)."""
+    return _aps_data(cluster, src_ep, seq) + bytes([0x05]) + _u16(manufacturer) + bytes([seq & 0xFF, command]) + payload

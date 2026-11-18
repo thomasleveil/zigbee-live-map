@@ -252,3 +252,37 @@ def test_dissect_shows_a_green_power_source_id_and_says_why_it_stops():
     reserved = dissect(bytes([0x01, 0x04, 0x00]) + bytes(12))    # destination addressing mode 1 does not exist
     assert reserved[-1]["layer"] == "Not decoded" and dict(reserved[-1]["fields"])["Reason"] == "reserved addressing mode"
     assert dissect(b"\x61")[-1]["layer"] == "Truncated"
+
+
+def _secured(payload):
+    return builders.build_secured_nwk(NET, seq=5, pan=0x1a62, mac_dst=0x4455, mac_src=0x0000, nwk_dst=0x4455, nwk_src=0x0000,
+                                      radius=30, nwk_seq=5, src64=COORD64, counter=77, payload=payload)
+
+
+def test_dissect_reads_a_philips_hue_light_update():
+    # Messages from the format's public description (bifrost, doc/hue-zigbee-format.md), as a Hue bridge sends them.
+    strip = bytes.fromhex("530101c00400135000000094031fda1955b98347f00468c426792800")
+    layers = dissect(_secured(builders.manufacturer_command(0xfc03, 0x100b, 0x00, strip)), NET)
+    field = lambda layer, name: dict(next(l for l in layers if l["layer"] == layer)["fields"])[name]
+    assert field("APS", "Cluster") == "0xfc03 (Philips Hue light control)"
+    assert field("ZCL", "Manufacturer code") == "0x100b (Signify, Philips Hue)" and field("ZCL", "Command") == "0x00 (Light update)"
+    hue = dict(layers[-1]["fields"])
+    assert layers[-1]["layer"] == "Philips Hue light update"
+    assert (hue["On"], hue["Brightness"], hue["Transition time"], hue["Gradient style"]) == (True, "192 of 254", 4, "linear")
+    assert hue["Gradient colours (CIE xy)"].count("(") == 5 and hue["Gradient colours (CIE xy)"].startswith("(0.1643, 0.1001)")
+    assert (hue["Gradient scale"], hue["Gradient offset"]) == (5.0, 0.0)
+
+    effect = dict(dissect(_secured(builders.manufacturer_command(0xfc03, 0x100b, 0x00, bytes.fromhex("ab00012e6f2f40100f7f"))), NET)[-1]["fields"])
+    assert effect == {"On": True, "Brightness": "46 of 254", "Colour (CIE xy)": "(0.1853, 0.0635)", "Effect": "cosmos", "Effect speed": "127 of 255"}
+    off = dict(dissect(_secured(builders.manufacturer_command(0xfc03, 0x100b, 0x00, bytes.fromhex("1100000800"))), NET)[-1]["fields"])
+    assert off == {"On": False, "Transition time": 8}
+
+
+def test_only_signifys_0xfc03_is_read_as_a_hue_light_update():
+    update = bytes.fromhex("1100000800")
+    other = dissect(_secured(builders.manufacturer_command(0xfc03, 0x1015, 0x00, update)), NET)   # the same cluster id under another manufacturer code
+    assert [l["layer"] for l in other][-1] == "ZCL" and dict(other[-2]["fields"])["Cluster"] == "0xfc03"
+    cut = dissect(_secured(builders.manufacturer_command(0xfc03, 0x100b, 0x00, update[:3])), NET)
+    assert cut[-1]["layer"] == "Philips Hue light update" and cut[-1]["fields"][0][0] == "Not decoded"
+    read = dissect(_secured(builders.manufacturer_command(0xfc03, 0x100b, 0x01, update)), NET)     # another command of that cluster
+    assert read[-1]["layer"] == "ZCL" and dict(read[-1]["fields"])["Command"] == "0x01"

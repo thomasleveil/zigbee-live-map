@@ -269,6 +269,8 @@ LQI is vendor-specific (0-255, higher is better). The thresholds the tool uses c
 
 The device sheet lists the neighbours a router reports with their LQI, and how many of a device's messages were confirmed end to end. Every network command gets its real name in the log, replacing the guess made from the frame's shape: route requests and replies (with the path cost accumulated so far), route records and their relays, network status, leave, rejoin, end-device timeout. Devices also announce their manufacturer, model, power source, firmware and battery level, which names them on the map (see [Device names](#device-names)).
 
+A click on a log line opens the frame itself, layer by layer, as a protocol analyser would show it: the MAC and NWK headers, and with the key the NWK command or the APS, ZDO and ZCL layers, with attribute values (signed and decimal ones as numbers). One manufacturer format is read further: the light updates a Philips Hue bridge sends its lights (cluster `0xFC03` with Signify's manufacturer code) are shown as what they ask for: on or off, brightness, colour, transition, effect and, for a strip, the gradient. That format is Signify's own, reverse-engineered by Christian Iversen and read here with the [hue-zigbee-encoding](https://pypi.org/project/hue-zigbee-encoding/) library.
+
 ## Reference
 
 ```
