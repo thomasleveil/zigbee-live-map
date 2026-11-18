@@ -2,7 +2,7 @@ import asyncio
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from zigbee_live_map import crypto, decode
+from zigbee_live_map import crypto, decode, server
 from zigbee_live_map.devices import DeviceStore
 from zigbee_live_map.server import Hub, build_app
 from zigbee_live_map.vendors import Registry
@@ -335,3 +335,23 @@ def test_fill_is_guarded_like_every_other_change(tmp_path):
         assert ok.status == 200 and (await ok.json()) == {"added": 1}
 
     run(scenario, tmp_path)
+
+
+def test_hello_carries_the_build_of_the_pages(tmp_path):
+    async def scenario(client, hub, origin):
+        ws = await client.ws_connect(f"/ws?token={origin['X-ZLM-Token']}", headers=origin)
+        hello = await ws.receive_json()
+        assert hello["build"] == server.page_build() and len(hello["build"]) == 16
+        await ws.close()
+    run(scenario, tmp_path)
+
+
+def test_page_build_follows_the_page_files(monkeypatch, tmp_path):
+    (tmp_path / "static" / "locales").mkdir(parents=True)
+    (tmp_path / "static" / "index.html").write_text("a")
+    (tmp_path / "static" / "locales" / "en.json").write_text("{}")
+    monkeypatch.setattr(server.resources, "files", lambda _pkg: tmp_path)
+    first = server.page_build()
+    assert server.page_build() == first
+    (tmp_path / "static" / "locales" / "en.json").write_text('{"x": "y"}')
+    assert server.page_build() != first

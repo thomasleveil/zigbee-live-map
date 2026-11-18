@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import hmac
 import json
 import math
@@ -75,6 +76,24 @@ DONGLE_REASONS = {
 
 def _static(name: str) -> str:
     return resources.files("zigbee_live_map").joinpath("static", name).read_text(encoding="utf-8")
+
+
+def page_build() -> str:
+    """A fingerprint of every file the pages are made of, read from disk now.
+
+    The page compares it across reconnections: a page left open while the tool was upgraded and restarted
+    reloads itself, instead of reading the new server's events with old code and old texts."""
+    digest = hashlib.sha256()
+
+    def walk(folder) -> None:
+        for entry in sorted(folder.iterdir(), key=lambda e: e.name):
+            if entry.is_dir():
+                walk(entry)
+            elif entry.is_file():
+                digest.update(entry.name.encode() + b"\0" + entry.read_bytes() + b"\0")
+
+    walk(resources.files("zigbee_live_map").joinpath("static"))
+    return digest.hexdigest()[:16]
 
 
 def list_locales() -> list[dict]:
@@ -170,7 +189,7 @@ class Hub:
         await self.send_all({"type": "security", **self.security_state()})
 
     def hello(self) -> dict:
-        return {"type": "hello", "version": __version__, **self.info, "names": self.names(), "hue": self.hue.view(),
+        return {"type": "hello", "version": __version__, "build": page_build(), **self.info, "names": self.names(), "hue": self.hue.view(),
                 "vendors": self.vendors(), "security": self.security_state(),
                 "identities": self.identities, "linkCosts": self.link_quality, "batteries": self.batteries}
 

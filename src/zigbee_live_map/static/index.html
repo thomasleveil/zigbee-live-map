@@ -916,6 +916,7 @@ function setNames(names, vendors) {
   for (const [ieee, m] of Object.entries(S.names)) if (m && m.nwk) S.hint.set(String(m.nwk).toLowerCase(), ieee);
   if (vendors) S.vendors = vendors;
 }
+let pageBuild = null;   // the build of the tool this page came from, learnt from the first hello
 async function connect() {
   const token = await ZLM.token(true);   // always a fresh one: the tool may have been restarted
   if (!token) { setTimeout(connect, 2000); return; }   // the tool is down, or the login page is taking over
@@ -928,6 +929,8 @@ async function connect() {
   ws.onmessage = m => {
     const d = JSON.parse(m.data);
     if (d.type === "hello") {
+      if (pageBuild && d.build && d.build !== pageBuild) { location.reload(); return; }   // the tool was upgraded while this page stayed open
+      pageBuild = d.build || pageBuild;
       reset(); sel = null; setNames(d.names, d.vendors || {}); S.mode = d.mode; S.channel = d.channel; S.canTune = !!d.can_tune;
       S.haApp = !!d.ha_app;   // the Home Assistant app: the notice gives Home Assistant advice, not a desktop's
       $("needsDesktop").hidden = $("needsDemoDesktop").hidden = S.haApp; $("needsApp").hidden = $("needsDemoApp").hidden = !S.haApp;
