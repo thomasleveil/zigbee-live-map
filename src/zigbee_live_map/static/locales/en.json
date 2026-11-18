@@ -377,7 +377,8 @@
   "card.idModel": "Model (from traffic)",
   "card.idPower": "Power source",
   "card.costs": "Link costs this router measures",
-  "card.costRow": "in {in}/7 · out {out}/7",
+  "card.costRow": "in {in} · out {out}",
+  "cost.unknown": "not measured yet",
   "card.battery": "Battery",
   "card.firmware": "Firmware",
   "card.appver": "App version",
@@ -404,7 +405,7 @@
 
   "issues.vulnerable": "⚠ This network uses the default key: its network key can be recovered from any join. Open Security for details.",
   "issues.touchlink": "⚠ This network's key was recovered from a Touchlink (ZLL) join. Open Security for details.",
-  "issues.cost": "{a} → {b}: the mesh itself rates this link poor (in {in}/7, out {out}/7; 7 is worst)",
+  "issues.cost": "{a} → {b}: the mesh itself rates this link poor (in {in}, out {out}; 7 is worst)",
   "issues.battery": "{name}: battery low ({pct} %)",
   "issues.nwkStatus": "{name} reported {n} times that it could not deliver: {status}, about {addr} (decrypted network status)",
   "issues.rejoins": "{name} rejoined the network {n} times: it keeps losing its parent",

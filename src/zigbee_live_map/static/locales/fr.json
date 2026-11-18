@@ -377,7 +377,8 @@
   "card.idModel": "Modèle (d'après le trafic)",
   "card.idPower": "Alimentation",
   "card.costs": "Coûts de lien mesurés par ce routeur",
-  "card.costRow": "entrant {in}/7 · sortant {out}/7",
+  "card.costRow": "entrant {in} · sortant {out}",
+  "cost.unknown": "pas encore mesuré",
   "card.battery": "Batterie",
   "card.firmware": "Firmware",
   "card.appver": "Version appli",
@@ -404,7 +405,7 @@
 
   "issues.vulnerable": "⚠ Ce réseau utilise la clé par défaut : sa clé réseau peut être récupérée à partir de n'importe quelle association. Ouvrez Sécurité pour les détails.",
   "issues.touchlink": "⚠ La clé de ce réseau a été récupérée à partir d'une association Touchlink (ZLL). Ouvrez Sécurité pour les détails.",
-  "issues.cost": "{a} → {b} : le maillage lui-même juge ce lien médiocre (entrant {in}/7, sortant {out}/7 ; 7 = pire)",
+  "issues.cost": "{a} → {b} : le maillage lui-même juge ce lien médiocre (entrant {in}, sortant {out} ; 7 = pire)",
   "issues.battery": "{name} : batterie faible ({pct} %)",
   "issues.nwkStatus": "{name} a signalé {n} fois ne pas pouvoir acheminer : {status}, à propos de {addr} (état du réseau déchiffré)",
   "issues.rejoins": "{name} a rejoint le réseau {n} fois : il perd régulièrement son parent",

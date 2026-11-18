@@ -466,6 +466,8 @@ function spawn(e, ms, md, toAll) {
 // ------------------------------------------------------------------ layout physics
 // Devices that often have to repeat themselves to each other are pushed apart: the worse the link, the longer the spring.
 // The mesh's own neighbour cost (1 best … 7 worst), from decrypted Link Status, worst of both directions.
+// A Link Status cost of 0 means "not measured yet" (the neighbour's own Link Status has not reached this router), never "perfect".
+const costText = v => v ? `${v}/7` : t("cost.unknown");
 function costBetween(a, b) {
   let worst = 0;
   const scan = (rows, target) => { if (rows) for (const r of rows) if (r.addr === target) worst = Math.max(worst, r.incoming || 0, r.outgoing || 0); };
@@ -735,7 +737,7 @@ function renderCard() {
     id && id.sw ? [c("firmware"), id.sw] : null, id && id.appVer != null ? [c("appver"), id.appVer] : null,
     batt ? [c("battery"), batt.percent != null ? `${batt.percent} %` : `${batt.volts} V`] : null].filter(Boolean);
   const costRows = S.costs[sel] || [];
-  const costs = costRows.map(r => { const hi = r.incoming >= 5 || r.outgoing >= 5; return `<li><span>${esc(label(r.addr))}</span><span class="${hi ? "hi" : ""}">${esc(t("card.costRow", { in: r.incoming, out: r.outgoing }))}</span></li>`; }).join("");
+  const costs = costRows.map(r => { const hi = r.incoming >= 5 || r.outgoing >= 5; return `<li><span>${esc(label(r.addr))}</span><span class="${hi ? "hi" : ""}">${esc(t("card.costRow", { in: costText(r.incoming), out: costText(r.outgoing) }))}</span></li>`; }).join("");
   const dl = rows => `<dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`;
   const hh = hubOf(n), plainWords = s => String(s).replace(/_/g, " ");
   const hubRows = hh ? [hh.name ? [c("hubName"), hh.name] : null, hh.product ? [c("hubProduct"), hh.product] : null, hh.model ? [c("hubModel"), hh.model] : null,
@@ -776,7 +778,7 @@ function findIssues() {
   }
   for (const [addr, costRows] of Object.entries(S.costs)) for (const r of costRows) {
     const worst = Math.max(r.incoming, r.outgoing);
-    if (worst >= 5) out.push({ weight: 5 + worst / 10, node: addr, text: t("issues.cost", { a: label(addr), b: label(r.addr), in: r.incoming, out: r.outgoing }) });
+    if (worst >= 5) out.push({ weight: 5 + worst / 10, node: addr, text: t("issues.cost", { a: label(addr), b: label(r.addr), in: costText(r.incoming), out: costText(r.outgoing) }) });
   }
   for (const f of S.nwkFail.values()) if (f.n >= 3)
     out.push({ weight: 5 + Math.min(f.n, 1000) / 1000, node: f.by, text: t("issues.nwkStatus", { name: label(f.by), status: ZLM.has("nwkstatus." + f.status) ? t("nwkstatus." + f.status) : t("nwkstatus.other", { code: f.status }), addr: label(f.addr), n: f.n }) });
