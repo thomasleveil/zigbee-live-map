@@ -794,6 +794,20 @@ function renderCard() {
   if (askedN) keyed.push([c("answers"), t("card.answersValue", { answered: answeredN, total: askedN, pct: Math.round(100 * answeredN / askedN), ms: answeredN ? Math.round(1000 * asked.reduce((n, s) => n + s.rtt, 0) / answeredN) : "?" })]);
   const nbRows = (S.neighbors[sel] || []).slice().sort((a, b) => a.lqi - b.lqi);
   const neighbours = nbRows.map(r => `<li><span>${esc(label(r.addr))} · ${esc(t("rel." + r.rel))}</span><span class="${r.lqi < LQI_POOR ? "hi" : ""}">LQI ${r.lqi}</span></li>`).join("");
+  // What the rest of the mesh says about this device: rejoins, failures reported by it or about it,
+  // how its neighbours hear it (their neighbour tables: the only measure of a battery device's link to its parent),
+  // and the costs other routers measure towards it.
+  const rejoins = S.rejoins.get(sel) || 0;
+  if (rejoins) keyed.push([c("rejoins"), String(rejoins)]);
+  const li = (who, value, hi) => `<li><span>${esc(who)}</span><span class="${hi ? "hi" : ""}">${esc(value)}</span></li>`;
+  const statusName = code => ZLM.has("nwkstatus." + code) ? t("nwkstatus." + code) : t("nwkstatus.other", { code });
+  const failures = [...S.nwkFail.values()].filter(f => f.by === sel || f.addr === sel).sort((a, b) => b.n - a.n)
+    .map(f => li(f.by === sel ? t("card.failBy", { addr: label(f.addr) }) : t("card.failAbout", { by: label(f.by) }), t("card.failValue", { status: statusName(f.status), n: f.n }), true)).join("");
+  const heardBy = Object.entries(S.neighbors).flatMap(([router, rows]) => rows.filter(r => r.addr === sel).map(r => [router, r]))
+    .sort((a, b) => a[1].lqi - b[1].lqi)
+    .map(([router, r]) => li(r.rel === "child" ? t("card.itsParent", { name: label(router) }) : label(router), `LQI ${r.lqi}`, r.lqi < LQI_POOR)).join("");
+  const costsOf = Object.entries(S.costs).flatMap(([router, rows]) => rows.filter(r => r.addr === sel).map(r => [router, r]))
+    .map(([router, r]) => li(label(router), t("card.costRow", { in: costText(r.incoming), out: costText(r.outgoing) }), r.incoming >= 5 || r.outgoing >= 5)).join("");
   const costRows = S.costs[sel] || [];
   const costs = costRows.map(r => { const hi = r.incoming >= 5 || r.outgoing >= 5; return `<li><span>${esc(label(r.addr))}</span><span class="${hi ? "hi" : ""}">${esc(t("card.costRow", { in: costText(r.incoming), out: costText(r.outgoing) }))}</span></li>`; }).join("");
   const dl = rows => `<dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`;
@@ -810,8 +824,12 @@ function renderCard() {
     `<p>${Object.entries(n.cats).sort((a, b) => b[1] - a[1]).map(([cat, k]) => chip(cat, ` <span class="n">${k}</span>`)).join(" ")}</p></div>` +
     hubGroup +
     `<div class="detailGroup keyed"><h3>${esc(t("detail.keyed"))}</h3>` +
-    (keyed.length || costs || neighbours
-      ? (keyed.length ? dl(keyed) : "") + (costs ? `<div class="note">${esc(c("costs"))}</div><ul class="costs">${costs}</ul>` : "")
+    (keyed.length || costs || neighbours || failures || heardBy || costsOf
+      ? (keyed.length ? dl(keyed) : "")
+        + (failures ? `<div class="note">${esc(c("failures"))}</div><ul class="costs">${failures}</ul>` : "")
+        + (heardBy ? `<div class="note">${esc(c("heardBy"))}</div><ul class="costs">${heardBy}</ul>` : "")
+        + (costsOf ? `<div class="note">${esc(c("costsOf"))}</div><ul class="costs">${costsOf}</ul>` : "")
+        + (costs ? `<div class="note">${esc(c("costs"))}</div><ul class="costs">${costs}</ul>` : "")
         + (neighbours ? `<div class="note">${esc(c("neighbours"))}</div><ul class="costs">${neighbours}</ul>` : "")
       : `<p class="note">${esc(t(S.security && S.security.keyKnown ? "detail.keyedWaiting" : "detail.keyless"))}</p>`) +
     `</div>`;
