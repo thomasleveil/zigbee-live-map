@@ -78,6 +78,10 @@ def _static(name: str) -> str:
     return resources.files("zigbee_live_map").joinpath("static", name).read_text(encoding="utf-8")
 
 
+# Categories frames.py gives NWK commands from their shape alone; the network key replaces that guess.
+NWK_COMMAND_CATS = {"nwk_cmd", "link_status", "route_request", "route_record"}
+
+
 def page_build() -> str:
     """A fingerprint of every file the pages are made of, read from disk now.
 
@@ -269,8 +273,17 @@ class Hub:
         ns = event.get("ns")
         if not ns:
             return
-        if event.get("cat") == "link_status":
-            rows = decode.link_costs(frame, key)
+        if event.get("cat") in NWK_COMMAND_CATS:
+            payload = decode.decrypt_network_payload(frame, key)
+            cmd = decode.nwk_command(payload) if payload else None
+            if cmd is None:
+                return
+            # The key replaces the guess made from the frame's shape: name the command, correct the category.
+            event["nc"] = cmd["name"]
+            event["cat"] = cmd["name"] if cmd["name"] in NWK_COMMAND_CATS else "nwk_cmd"
+            rows = cmd["detail"].pop("links", None)
+            if cmd["detail"]:
+                event["nx"] = cmd["detail"]
             if rows is not None and self.link_quality.get(ns) != rows:
                 self.link_quality[ns] = rows
                 await self.send_all({"type": "linkcosts", "addr": ns, "rows": rows})

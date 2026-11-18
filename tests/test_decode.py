@@ -107,3 +107,26 @@ def test_network_payload_round_trips():
                                      src64=DEV64, counter=1, payload=b"hello aps")
     assert decode.decrypt_network_payload(frame, NET) == b"hello aps"
     assert decode.decrypt_network_payload(frame, bytes(16)) is None
+
+
+def test_nwk_commands_are_named_with_their_fields():
+    cases = {
+        "01080a72cb0300": ("route_request", {"dst": "0xcb72", "cost": 3, "m2o": True}),
+        "02000ab926f7d903": ("route_reply", {"originator": "0x26b9", "responder": "0xd9f7", "cost": 3}),
+        "030c72cb": ("network_status", {"status": 12, "addr": "0xcb72"}),
+        "0460": ("leave", {"rejoin": True, "request": True, "children": False}),
+        "0502d94eb926": ("route_record", {"relays": ["0x4ed9", "0x26b9"]}),
+        "0680": ("rejoin_request", {}),
+        "07883300": ("rejoin_response", {"addr": "0x3388", "status": 0}),
+        "0b0800": ("ed_timeout_request", {"minutes": 256}),
+        "0c0001": ("ed_timeout_response", {"status": 0}),
+        "1f00": ("0x1f", {}),
+    }
+    for raw, (name, detail) in cases.items():
+        assert decode.nwk_command(bytes.fromhex(raw)) == {"name": name, "detail": detail}, raw
+
+
+def test_a_truncated_nwk_command_keeps_its_name_without_guessed_fields():
+    assert decode.nwk_command(bytes.fromhex("0300")) == {"name": "network_status", "detail": {}}
+    assert decode.nwk_command(bytes.fromhex("0503d94e")) == {"name": "route_record", "detail": {}}
+    assert decode.nwk_command(b"") is None

@@ -355,3 +355,22 @@ def test_page_build_follows_the_page_files(monkeypatch, tmp_path):
     assert server.page_build() == first
     (tmp_path / "static" / "locales" / "en.json").write_text('{"x": "y"}')
     assert server.page_build() != first
+
+
+def test_the_network_key_names_network_commands_and_corrects_the_shape_guess(tmp_path):
+    async def scenario(client, hub, origin):
+        def command(payload, counter):
+            return decode.build_secured_nwk(NET, seq=counter, pan=0x1A62, mac_dst=0x0000, mac_src=0x6164,
+                                            nwk_dst=0x0000, nwk_src=0x6164, radius=30, nwk_seq=counter,
+                                            src64=DEV64, counter=counter, payload=payload, command=True)
+        status = command(bytes.fromhex("030c72cb"), 1)   # sent to the coordinator: shaped like a route record
+        await hub.publish(status, 1.0, None)
+        assert hub.events[-1]["cat"] == "route_record" and "nc" not in hub.events[-1]   # no key: the guess stays
+        hub.network_key = NET
+        await hub.publish(command(bytes.fromhex("030c72cb"), 2), 2.0, None)
+        ev = hub.events[-1]
+        assert (ev["cat"], ev["nc"], ev["nx"]) == ("nwk_cmd", "network_status", {"status": 12, "addr": "0xcb72"})
+        await hub.publish(command(bytes.fromhex("0501d94e"), 3), 3.0, None)
+        ev = hub.events[-1]
+        assert (ev["cat"], ev["nc"], ev["nx"]) == ("route_record", "route_record", {"relays": ["0x4ed9"]})
+    run(scenario, tmp_path)

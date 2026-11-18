@@ -209,6 +209,7 @@ const CAT_ORDER = ["poll", "ack", "link_status", "route_request", "route_record"
 const HOP = new Set(["data_direct", "data_multihop", "route_record", "nwk_cmd", "join"]);
 const SPREAD = new Set(["broadcast", "route_request", "link_status"]);
 const BROADCAST = new Set(["0xffff", "0xfffd", "0xfffc", "0xfffb"]);
+const NWK_STATUS_INFO = new Set([10, 14, 15, 16]);   // network status codes that report no failure: validate route, verify addresses, PAN id and address updates
 const MAX_EVENTS = 20000, LOG_ROWS = 250, WINDOW_S = 120;
 const FORWARD_TIMEOUT_S = 12;        // a frame not relayed after this long is counted as not relayed
 const LINK_MIN_FRAMES = 20;          // below this, a retransmission rate says nothing
@@ -224,7 +225,7 @@ const dirty = { devices: true, card: true, legend: true, security: true };
 const newFocus = () => ({ polls: 0, relayed: 0, rebroadcast: 0, beacon: null, joins: [] });
 function reset() {
   S = { pans: {}, hint: new Map(), nodes: new Map(), links: new Map(), pairs: new Map(), waiting: new Map(), lastHandover: null, sweptAt: 0, ghostsAt: 0, events: [], counts: {},
-        ieee2addr: new Map(), names: {}, vendors: {}, focusIeee: null, focusAddr: null, total: 0, recent: [], pan: null, mode: "live", channel: null, canTune: false, haApp: false, focus: newFocus(),
+        ieee2addr: new Map(), nwkFail: new Map(), rejoins: new Map(), names: {}, vendors: {}, focusIeee: null, focusAddr: null, total: 0, recent: [], pan: null, mode: "live", channel: null, canTune: false, haApp: false, focus: newFocus(),
         security: { vulnerable: false, secureJoinSeen: false, keyKnown: false, keySource: null, key: null }, identities: {}, costs: {}, batteries: {},
         hue: { configured: false, devices: {} } };
   parts.length = 0; rings.length = 0;
@@ -358,6 +359,11 @@ function processEvent(e, live) {
     if (HOP.has(e.cat)) { const l = link(ms, md); l.count++; if (live) l.heat = 1; }
     trackForward(e, ms, md);
   }
+  if (e.nc === "network_status" && e.nx && e.ns && !NWK_STATUS_INFO.has(e.nx.status)) {   // a router reports a delivery it could not make
+    const k = `${e.ns}|${e.nx.status}|${e.nx.addr}`, f = S.nwkFail.get(k) || { by: e.ns, status: e.nx.status, addr: e.nx.addr, n: 0 };
+    f.n++; S.nwkFail.set(k, f);
+  }
+  if (e.nc === "rejoin_response" && e.nx && e.nx.status === 0) S.rejoins.set(e.nx.addr, (S.rejoins.get(e.nx.addr) || 0) + 1);   // it had lost its parent
   if (e.cat === "ack" && ms) { const w = S.waiting.get(S.lastHandover); if (w && w.router === ms && w.from === md) w.acked = true; }
   sweepGhosts(e.t);
   tallyFocus(e, ms, md);
@@ -379,9 +385,25 @@ function explain(e) {
     case "data_multihop": text = t(`explain.data_multihop.${relay ? "relay" : "origin"}`, v) + (e.relays && e.relays.length ? t("explain.data_multihop.route", { relays: e.relays.map(label).join(", ") }) : ""); break;
     case "beacon": { const b = e.bcn || {}; text = t("explain.beacon", { ...v, zr: yn(b.zr), zed: yn(b.zed), permit: yn(b.permit) }); break; }
     case "join": text = e.st === undefined ? t("explain.join.request", v) : t("explain.join.response", { ...v, status: ZLM.has("assoc." + e.st) ? t("assoc." + e.st) : t("assoc.other", { code: e.st }) }); break;
+    case "nwk_cmd": text = e.nc ? t("explain.nwkcmd", { ...v, command: ZLM.has("nwkcmd." + e.nc) ? t("nwkcmd." + e.nc) : t("nwkcmd.other", { id: e.nc }) }) : t("explain.nwk_cmd", v); break;
     default: text = ZLM.has("explain." + e.cat) ? t("explain." + e.cat, v) : catLearn(e.cat);
   }
-  return text + (e.rt ? t("explain.retry") : "");
+  return text + (e.nx ? nwkDetail(e.nc, e.nx) : "") + (e.rt ? t("explain.retry") : "");
+}
+// What a decrypted network command says (the server reads it only when it has the network key).
+function nwkDetail(nc, x) {
+  const status = (prefix, code) => ZLM.has(`${prefix}.${code}`) ? t(`${prefix}.${code}`) : t(`${prefix}.other`, { code });
+  switch (nc) {
+    case "route_request": return x.m2o ? "" : " " + t("nwkx.route_request", { dst: label(x.dst) });
+    case "route_reply": return " " + t("nwkx.route_reply", { originator: label(x.originator), responder: label(x.responder), cost: x.cost });
+    case "network_status": return " " + t("nwkx.network_status", { status: status("nwkstatus", x.status), addr: label(x.addr) });
+    case "leave": return x.request ? " " + t("nwkx.leave.request") : x.rejoin ? " " + t("nwkx.leave.rejoin") : "";
+    case "route_record": return x.relays && x.relays.length ? " " + t("nwkx.route_record", { relays: x.relays.map(label).join(", ") }) : "";
+    case "rejoin_response": return " " + t("nwkx.rejoin_response", { addr: x.addr, status: status("assoc", x.status) });
+    case "ed_timeout_request": return " " + t("nwkx.ed_timeout_request", { time: x.minutes < 1 ? "10 s" : `${x.minutes} min` });
+    case "ed_timeout_response": return " " + t(x.status === 0 ? "nwkx.ed_timeout_response.ok" : "nwkx.ed_timeout_response.refused");
+  }
+  return "";
 }
 function rowFor(e) {
   const d = new Date(e.t * 1000), ms = key(e.ms), md = key(e.md);
@@ -756,6 +778,9 @@ function findIssues() {
     const worst = Math.max(r.incoming, r.outgoing);
     if (worst >= 5) out.push({ weight: 5 + worst / 10, node: addr, text: t("issues.cost", { a: label(addr), b: label(r.addr), in: r.incoming, out: r.outgoing }) });
   }
+  for (const f of S.nwkFail.values()) if (f.n >= 3)
+    out.push({ weight: 5 + Math.min(f.n, 1000) / 1000, node: f.by, text: t("issues.nwkStatus", { name: label(f.by), status: ZLM.has("nwkstatus." + f.status) ? t("nwkstatus." + f.status) : t("nwkstatus.other", { code: f.status }), addr: label(f.addr), n: f.n }) });
+  for (const [addr, n] of S.rejoins) if (n >= 2) out.push({ weight: 4 + Math.min(n, 100) / 100, node: addr, text: t("issues.rejoins", { name: label(addr), n }) });
   for (const [addr, b] of Object.entries(S.batteries)) if (b.percent != null && b.percent <= 15)
     out.push({ weight: 4 - b.percent / 100, node: addr, text: t("issues.battery", { name: label(addr), pct: b.percent }) });
   for (const p of S.pairs.values()) if (quality(p) === "poor")

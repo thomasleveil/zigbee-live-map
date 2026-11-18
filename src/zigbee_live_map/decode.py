@@ -356,18 +356,68 @@ def read_device(frame: bytes, network_key: bytes) -> dict | None:
 def link_costs(frame: bytes, network_key: bytes) -> list[dict] | None:
     """A router's Link Status: each neighbour with the costs it measures (1 best … 7 worst)."""
     payload = decrypt_network_payload(frame, network_key)
-    if payload is None or not payload or payload[0] != 0x08:   # NWK command 0x08 = Link Status
+    cmd = nwk_command(payload) if payload else None
+    return cmd["detail"]["links"] if cmd and cmd["name"] == "link_status" else None
+
+
+# NWK command identifiers (Zigbee PRO specification, § 3.4, and the R23 commissioning pair).
+NWK_COMMANDS = {
+    0x01: "route_request", 0x02: "route_reply", 0x03: "network_status", 0x04: "leave", 0x05: "route_record",
+    0x06: "rejoin_request", 0x07: "rejoin_response", 0x08: "link_status", 0x09: "network_report",
+    0x0A: "network_update", 0x0B: "ed_timeout_request", 0x0C: "ed_timeout_response", 0x0D: "link_power_delta",
+    0x0E: "commissioning_request", 0x0F: "commissioning_response",
+}
+
+
+def _addr(w: _Walk) -> str:
+    return f"0x{w.u16():04x}"
+
+
+def nwk_command(payload: bytes) -> dict | None:
+    """Name a decrypted NWK command payload and read the fields worth showing.
+
+    Returns {"name", "detail"}; an unknown identifier is named "0x.." with no detail. A field that is
+    cut short is left out rather than guessed."""
+    if not payload:
         return None
+    cid = payload[0]
+    name = NWK_COMMANDS.get(cid, f"0x{cid:02x}")
+    detail: dict = {}
+    w = _Walk(payload[1:])
     try:
-        w = _Walk(payload); w.u8()
-        options = w.u8(); count = options & 0x1F
-        rows = []
-        for _ in range(count):
-            addr = w.u16(); costs = w.u8()
-            rows.append({"addr": f"0x{addr:04x}", "incoming": costs & 0x07, "outgoing": (costs >> 4) & 0x07})
-        return rows
-    except (IndexError, ValueError):
-        return None
+        if cid == 0x01:
+            options = w.u8(); w.u8()
+            detail = {"dst": _addr(w), "cost": w.u8(), "m2o": bool((options >> 3) & 3)}
+        elif cid == 0x02:
+            w.u8(); w.u8()
+            detail = {"originator": _addr(w), "responder": _addr(w), "cost": w.u8()}
+        elif cid == 0x03:
+            detail = {"status": w.u8(), "addr": _addr(w)}
+        elif cid == 0x04:
+            options = w.u8()
+            detail = {"rejoin": bool(options & 0x20), "request": bool(options & 0x40), "children": bool(options & 0x80)}
+        elif cid == 0x05:
+            count = w.u8()
+            detail = {"relays": [_addr(w) for _ in range(count)]}
+        elif cid == 0x07:
+            detail = {"addr": _addr(w), "status": w.u8()}
+        elif cid == 0x08:
+            count = w.u8() & 0x1F
+            links = []
+            for _ in range(count):
+                addr = _addr(w); costs = w.u8()
+                links.append({"addr": addr, "incoming": costs & 0x07, "outgoing": (costs >> 4) & 0x07})
+            detail = {"links": links}
+        elif cid == 0x0B:
+            timeout = w.u8()
+            detail = {"minutes": 10 / 60 if timeout == 0 else 2 ** timeout}
+        elif cid == 0x0C:
+            detail = {"status": w.u8()}
+    except IndexError:
+        detail = {}
+    if w.pos > len(w.d):   # the walker reads past the end without raising: drop a truncated read
+        detail = {}
+    return {"name": name, "detail": detail}
 
 
 # --- building secured frames (the demo's vulnerable join, and the tests) --------------------
@@ -378,9 +428,9 @@ def _mac_data_header(seq: int, pan: int, dst: int, src: int) -> bytes:
 
 def build_secured_nwk(net_key: bytes, *, seq: int, pan: int, mac_dst: int, mac_src: int,
                       nwk_dst: int, nwk_src: int, radius: int, nwk_seq: int, src64: int,
-                      counter: int, payload: bytes, key_seq: int = 0) -> bytes:
-    """A network-key-secured NWK data frame carrying `payload` (the APS layer)."""
-    nwk = (0x0208 | (2 << 2)).to_bytes(2, "little") + nwk_dst.to_bytes(2, "little") + nwk_src.to_bytes(2, "little") + bytes([radius, nwk_seq])
+                      counter: int, payload: bytes, key_seq: int = 0, command: bool = False) -> bytes:
+    """A network-key-secured NWK frame carrying `payload`: the APS layer, or with `command` a NWK command."""
+    nwk = (0x0208 | (2 << 2) | (1 if command else 0)).to_bytes(2, "little") + nwk_dst.to_bytes(2, "little") + nwk_src.to_bytes(2, "little") + bytes([radius, nwk_seq])
     nwk_start_in_mac = len(_mac_data_header(seq, pan, mac_dst, mac_src))
     secctl = 0x28 | crypto.SECURITY_LEVEL   # key id 1 (network), extended nonce, level 5
     aux = bytes([secctl]) + counter.to_bytes(4, "little") + src64.to_bytes(8, "little") + bytes([key_seq])
