@@ -44,28 +44,39 @@ class _Reader:
 
 
 def parse(frame: bytes) -> dict:
-    """Return the readable header fields. 'kind' is ack, beacon, cmd, data or bad."""
+    """Return the readable header fields. 'kind' is ack, beacon, cmd, data, empty or bad.
+
+    The MAC header follows IEEE 802.15.4-2015 § 7.2: frame versions 0 and 1 (2003/2006, what Zigbee sends)
+    and 2 (2015, which may suppress the sequence number, carry information elements and compress PAN ids
+    by the table of § 7.2.2.6). 'empty' is a data frame with no payload at all: § 6.7.3 lets a parent
+    answer a data request that way when, after all, it has nothing for the device that polled."""
     out: dict = {"kind": "bad"}
-    if len(frame) < 3:
+    if len(frame) < 2:
         return out
     fcf = int.from_bytes(frame[0:2], "little")
-    ftype, ack_req, pan_comp = fcf & 7, bool(fcf & 0x20), bool(fcf & 0x40)
+    ftype, version = fcf & 7, (fcf >> 12) & 3
     dst_mode, src_mode = (fcf >> 10) & 3, (fcf >> 14) & 3
-    out.update(seq=frame[2], ack_req=ack_req, pending=bool(fcf & 0x10))
-    if ftype == 2:
-        out["kind"] = "ack"
-        return out
-    if ftype not in (0, 1, 3) or fcf & 0x08 or 1 in (dst_mode, src_mode):
-        return out  # MAC-layer security or reserved modes: not Zigbee
-    rd = _Reader(frame, 3)
+    out.update(ack_req=bool(fcf & 0x20), pending=bool(fcf & 0x10))
+    rd = _Reader(frame, 2)
     try:
-        if dst_mode:
+        if not (version == 2 and fcf & 0x0100):   # sequence number suppression exists from 2015 on
+            out["seq"] = rd.u8()
+        if ftype == 2:
+            out["kind"] = "ack"
+            return out
+        if ftype not in (0, 1, 3) or fcf & 0x08 or version == 3 or 1 in (dst_mode, src_mode):
+            return out  # MAC security, frame types and modes Zigbee never uses, reserved version: not Zigbee
+        dst_pan, src_pan = _pan_ids(version, dst_mode, src_mode, bool(fcf & 0x40))
+        if dst_pan:
             out["pan"] = rd.short()
+        if dst_mode:
             out["mdst"] = rd.addr(dst_mode)
+        if src_pan:
+            out["pan"] = rd.short()
         if src_mode:
-            if not pan_comp:
-                out["pan"] = rd.short()
             out["msrc"] = rd.addr(src_mode)
+        if version == 2 and fcf & 0x0200:
+            _skip_ies(rd)
         if ftype == 0:
             out["kind"] = "beacon"
             out["beacon"] = _parse_beacon(rd)
@@ -75,6 +86,8 @@ def parse(frame: bytes) -> dict:
             if out["cmd"] == 0x02:  # association response: assigned short address + status, in clear
                 rd.take(2)
                 out["assoc_status"] = rd.u8()
+        elif rd.pos == len(frame):
+            out["kind"] = "empty"
         else:
             out["kind"] = "data"
             out["nwk"] = _parse_nwk(rd)
@@ -99,11 +112,54 @@ def _parse_beacon(rd: _Reader) -> dict:
     return info
 
 
+def _pan_ids(version: int, dst_mode: int, src_mode: int, compressed: bool) -> tuple[bool, bool]:
+    """(destination PAN id present, source PAN id present)."""
+    if version < 2:   # 2003/2006: compression only drops the source PAN id when both addresses are there
+        return bool(dst_mode), bool(src_mode) and not (compressed and dst_mode)
+    if not dst_mode and not src_mode:
+        return compressed, False
+    if not src_mode:
+        return not compressed, False
+    if not dst_mode:
+        return False, not compressed
+    if dst_mode == 3 and src_mode == 3:
+        return not compressed, False
+    return True, not compressed
+
+
+def _skip_ies(rd: _Reader) -> None:
+    """Step over 802.15.4-2015 header IEs, then payload IEs if a header termination announces them."""
+    while rd.pos < len(rd.data):
+        desc = int.from_bytes(rd.take(2), "little")
+        rd.take(desc & 0x7F)
+        element = (desc >> 7) & 0xFF
+        if element == 0x7F:   # header termination 2: the MAC payload follows, without payload IEs
+            return
+        if element == 0x7E:   # header termination 1: payload IEs follow
+            break
+    else:
+        return
+    while rd.pos < len(rd.data):
+        desc = int.from_bytes(rd.take(2), "little")
+        rd.take(desc & 0x07FF)
+        if (desc >> 11) & 0x0F == 0x0F:   # payload termination
+            return
+
+
 def _parse_nwk(rd: _Reader) -> dict | None:
-    fcf = int.from_bytes(rd.take(2), "little")
-    if (fcf >> 2) & 0x0F != 2:  # protocol version 2 = Zigbee PRO; 3 is Green Power
+    first = rd.u8()
+    version = (first >> 2) & 0x0F
+    if version == 3:   # Green Power: a one-byte frame control and its own header
+        return _parse_gpdf(rd, first)
+    if version != 2:   # 2 is Zigbee 2006/PRO
         return None
-    nwk: dict = {"type": fcf & 3, "dst": rd.short(), "src": rd.short(), "radius": rd.u8(), "seq": rd.u8()}
+    fcf = first | rd.u8() << 8
+    ftype = fcf & 3
+    if ftype == 3:   # inter-PAN (Touchlink commissioning, for instance): the header is this frame control alone
+        return {"type": 3}
+    if ftype == 2:   # reserved
+        return None
+    nwk: dict = {"type": ftype, "dst": rd.short(), "src": rd.short(), "radius": rd.u8(), "seq": rd.u8()}
     if fcf & 0x0800:
         nwk["dst64"] = rd.ieee()
     if fcf & 0x1000:
@@ -120,6 +176,21 @@ def _parse_nwk(rd: _Reader) -> dict | None:
         if control & 0x20:
             nwk["sec64"] = rd.ieee()
     return nwk
+
+
+def _parse_gpdf(rd: _Reader, fc: int) -> dict:
+    """Green Power Device Frame header (Green Power Basic specification, A.1.4.1).
+
+    The GPD source id is in clear whenever the application id is 0 (the common case: switches, sensors)."""
+    gp: dict = {"gp": True}
+    ftype, app_id = fc & 3, 0
+    if fc & 0x80:
+        ext = rd.u8()
+        app_id = ext & 7
+        gp["to_gpd"] = bool(ext & 0x80)
+    if app_id == 0 and (ftype == 0 or (ftype == 1 and fc & 0x80)):
+        gp["gpd"] = f"0x{int.from_bytes(rd.take(4), 'little'):08x}"
+    return gp
 
 
 class Classifier:
@@ -140,7 +211,7 @@ class Classifier:
         if kind == "ack":
             ev["cat"] = "ack"
             waiting = self._awaiting_ack
-            if waiting and waiting["seq"] == p["seq"]:
+            if waiting and "seq" in p and waiting["seq"] == p["seq"]:
                 ev["ms"], ev["md"] = waiting["dst"], waiting["src"]
             if p["pending"]:  # the parent has more for this child: its indirect queue is not empty
                 ev["fp"] = 1
@@ -151,7 +222,7 @@ class Classifier:
             if src_key in p:
                 ev[key] = p[src_key]
         if p["ack_req"] and "msrc" in p and p.get("mdst") not in (None, "0xffff"):
-            self._awaiting_ack = {"seq": p["seq"], "src": p["msrc"], "dst": p["mdst"]}
+            self._awaiting_ack = {"seq": p.get("seq"), "src": p["msrc"], "dst": p["mdst"]}
             # A MAC retransmission is the very same bytes again: the sender did not get its acknowledgement.
             previous = self._last_sent.get(p["msrc"])
             if previous and previous[0] == frame and 0 <= ts - previous[1] < 1.0:
@@ -165,6 +236,14 @@ class Classifier:
             ev["cmd"] = p["cmd"]
             if "assoc_status" in p:
                 ev["st"] = p["assoc_status"]
+        elif kind == "empty":   # the parent had nothing for the device that polled it after all
+            ev["cat"] = "no_data"
+        elif p["nwk"] and p["nwk"].get("gp"):
+            ev["cat"] = "green_power"
+            if "gpd" in p["nwk"]:
+                ev["gpd"] = p["nwk"]["gpd"]
+        elif p["nwk"] and p["nwk"]["type"] == 3:
+            ev["cat"] = "inter_pan"
         elif p["nwk"]:
             self._classify_nwk(ev, p["nwk"])
         return ev
@@ -206,6 +285,21 @@ def _ieee(addr: str) -> bytes:
 
 def build_ack(seq: int, pending: bool = False) -> bytes:
     return bytes([0x12 if pending else 0x02, 0x00, seq & 0xFF])
+
+
+def build_empty_data(seq: int, pan: str, parent: str, child: str) -> bytes:
+    """A parent's empty data frame: it set frame pending in its acknowledgement, then had nothing to send."""
+    return bytes([0x41, 0x88, seq & 0xFF]) + _short(pan) + _short(child) + _short(parent)
+
+
+def build_inter_pan(seq: int, src_pan: str, src64: str, payload: bytes = b"\x0b\x00\x00") -> bytes:
+    """An inter-PAN broadcast (Touchlink scan request shape): destination PAN and address 0xffff, extended source."""
+    return bytes([0x01, 0xC8, seq & 0xFF]) + b"\xff\xff\xff\xff" + _short(src_pan) + _ieee(src64) + b"\x0b\x00" + payload
+
+
+def build_gpdf(seq: int, src_id: int, payload: bytes = b"\x00\x00\x00\x00\x20") -> bytes:
+    """A Green Power data frame: broadcast, no MAC source, application id 0 so the source id travels in clear."""
+    return bytes([0x01, 0x08, seq & 0xFF]) + b"\xff\xff\xff\xff" + b"\x0c" + src_id.to_bytes(4, "little") + payload
 
 
 def build_poll(seq: int, pan: str, parent: str, child: str) -> bytes:

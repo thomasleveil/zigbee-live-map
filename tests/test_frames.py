@@ -70,7 +70,7 @@ def test_beacon_request():
 def test_truncated_and_garbage_frames_never_raise():
     good = nwk(COORD, ROUTER)
     for cut in range(len(good)):
-        assert zf.Classifier().event(good[:cut], 0.0)["cat"] in {"other", "ack", "data_direct", "data_multihop"}
+        assert zf.Classifier().event(good[:cut], 0.0)["cat"] in {"other", "ack", "no_data", "data_direct", "data_multihop"}
     assert classify(b"")["cat"] == "other"
     assert classify(bytes(range(40)))["cat"] in {"other", "ack", "mac_cmd"}
 
@@ -92,3 +92,52 @@ def test_nwk_sequence_number_identifies_a_message_across_hops():
 def test_ack_frame_pending_bit():
     assert zf.Classifier().event(zf.build_ack(1, pending=True), 0.0)["fp"] == 1
     assert "fp" not in zf.Classifier().event(zf.build_ack(1), 0.0)
+
+
+def test_empty_data_frame_after_a_pending_ack_is_a_no_data_reply():
+    clf = zf.Classifier()
+    clf.event(zf.build_poll(42, PAN, ROUTER, CHILD), 0.0)
+    clf.event(zf.build_ack(42, pending=True), 0.001)
+    ev = clf.event(zf.build_empty_data(9, PAN, ROUTER, CHILD), 0.005)
+    assert ev["cat"] == "no_data" and (ev["ms"], ev["md"], ev["pan"]) == (ROUTER, CHILD, PAN)
+
+
+def test_inter_pan_frame_has_a_frame_control_only_nwk_header():
+    ev = classify(zf.build_inter_pan(5, PAN, ROUTER_IEEE))
+    assert ev["cat"] == "inter_pan" and ev["ms"] == ROUTER_IEEE and ev["md"] == "0xffff" and ev["pan"] == PAN
+    assert "ns" not in ev
+
+
+def test_green_power_frame_exposes_its_source_id():
+    ev = classify(zf.build_gpdf(3, 0x0151A2B3))
+    assert ev["cat"] == "green_power" and ev["gpd"] == "0x0151a2b3"
+
+
+def test_green_power_with_extended_frame_control():
+    frame = bytes([0x01, 0x08, 1]) + bytes.fromhex("ffffffff") + bytes([0x8C, 0x10]) + (0x12345678).to_bytes(4, "little") + bytes(9)
+    ev = classify(frame)
+    assert ev["cat"] == "green_power" and ev["gpd"] == "0x12345678"
+
+
+def test_2015_frame_with_suppressed_sequence_number_and_header_ies():
+    inner = nwk(COORD, ROUTER)[9:]   # the NWK frame of a 2006 frame
+    fcf = 0x0001 | 0x0040 | 0x0100 | 0x0200 | (2 << 10) | (2 << 12) | (2 << 14)   # data, PAN id compression, no seq, IEs
+    ie = (2 | (0x1A << 7)).to_bytes(2, "little") + b"\xaa\xbb"   # a 2-byte header IE
+    term = (0x7F << 7).to_bytes(2, "little")                       # header termination 2: payload follows
+    frame = fcf.to_bytes(2, "little") + zf._short(PAN) + zf._short(COORD) + zf._short(ROUTER) + ie + term + inner
+    ev = classify(frame)
+    assert ev["cat"] == "data_direct" and (ev["ms"], ev["md"], ev["pan"], ev["ns"]) == (ROUTER, COORD, PAN, ROUTER)
+
+
+def test_2015_pan_id_compression_table():
+    # IEEE 802.15.4-2015 table 7-2: (dst mode, src mode, compression) -> (dst PAN, src PAN)
+    assert zf._pan_ids(2, 0, 0, False) == (False, False) and zf._pan_ids(2, 0, 0, True) == (True, False)
+    assert zf._pan_ids(2, 2, 0, False) == (True, False) and zf._pan_ids(2, 2, 0, True) == (False, False)
+    assert zf._pan_ids(2, 0, 3, False) == (False, True) and zf._pan_ids(2, 0, 3, True) == (False, False)
+    assert zf._pan_ids(2, 3, 3, False) == (True, False) and zf._pan_ids(2, 3, 3, True) == (False, False)
+    assert zf._pan_ids(2, 2, 2, False) == (True, True) and zf._pan_ids(2, 2, 3, True) == (True, False)
+
+
+def test_mac_security_and_unused_frame_types_stay_not_decoded():
+    assert classify(bytes([0x69, 0x88, 1]) + bytes(20))["cat"] == "other"   # MAC security enabled
+    assert classify(bytes([0x04, 0x88, 1]) + bytes(20))["cat"] == "other"   # multipurpose frame

@@ -205,7 +205,7 @@
 "use strict";
 const { t, esc, rich, prefs } = ZLM;
 const $ = id => document.getElementById(id);
-const CAT_ORDER = ["poll", "ack", "link_status", "route_request", "route_record", "data_direct", "data_multihop", "broadcast", "beacon_req", "beacon", "join", "nwk_cmd", "mac_cmd", "foreign", "other"];
+const CAT_ORDER = ["poll", "ack", "link_status", "route_request", "route_record", "data_direct", "data_multihop", "broadcast", "beacon_req", "beacon", "join", "nwk_cmd", "mac_cmd", "no_data", "inter_pan", "green_power", "foreign", "other"];
 const HOP = new Set(["data_direct", "data_multihop", "route_record", "nwk_cmd", "join"]);
 const SPREAD = new Set(["broadcast", "route_request", "link_status"]);
 const BROADCAST = new Set(["0xffff", "0xfffd", "0xfffc", "0xfffb"]);
@@ -219,7 +219,7 @@ const catLearn = c => t(`cat.${ZLM.has(`cat.${c}.learn`) ? c : "other"}.learn`);
 
 // ------------------------------------------------------------------ state
 let S, pal, sel = null, frozen = false, animOn = !RM && prefs.get("anim", "on") !== "off", ws = null, connOpen = false, sniffer = { sniffer: "starting", detail: "" }, pending = 0;
-const hidden = new Set(["ack"]), parts = [], rings = [];
+const hidden = new Set(["ack", "no_data"]), parts = [], rings = [];
 const dirty = { devices: true, card: true, legend: true, security: true };
 const newFocus = () => ({ polls: 0, relayed: 0, rebroadcast: 0, beacon: null, joins: [] });
 function reset() {

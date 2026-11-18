@@ -308,7 +308,7 @@ The header decoder has no dependency beyond the standard library. Its output was
 - The dongle only hears what reaches it. A far-away device may be missing, and a missing frame is not proof that it was not sent.
 - Signal strength (dBm) is what the sniffer received, not the link quality between two devices.
 - One sniffer model is supported for now. `sniffer.py` is small and isolated: other 802.15.4 sniffers can be added there.
-- Zigbee PRO only. Green Power frames and other 802.15.4 protocols show up as "not decoded".
+- Zigbee PRO, plus the headers of Green Power and inter-PAN (Touchlink) frames. Other 802.15.4 protocols, MAC-secured frames and damaged frames show up as "not decoded".
 
 ## Translating
 

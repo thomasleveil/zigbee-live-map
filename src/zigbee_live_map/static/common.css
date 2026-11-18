@@ -5,6 +5,7 @@
   --c-poll: #b9a2ff; --c-ack: #a4b0cc; --c-link_status: #5eead4; --c-route_request: #fdba74;
   --c-route_record: #fde047; --c-data_direct: #7cb7ff; --c-data_multihop: #ff9fb0; --c-broadcast: #86efac;
   --c-beacon: #f0abfc; --c-beacon_req: #e2c4ff; --c-join: #ffffff; --c-nwk_cmd: #cbd5e1; --c-mac_cmd: #cbd5e1;
+  --c-no_data: #a4b0cc; --c-inter_pan: #ffffff; --c-green_power: #bef264;
   --c-other: #9aa6c0; --c-foreign: #9aa6c0;
   --n-coord: #9cc4ff; --n-router: #5fd4e0; --n-zed: #b9a2ff; --n-focus: #ffb454; --n-unknown: #9aa6c0;
   --chipmix: 16%;
@@ -15,6 +16,7 @@
   --c-poll: #5b21b6; --c-ack: #374151; --c-link_status: #115e59; --c-route_request: #9a3412;
   --c-route_record: #854d0e; --c-data_direct: #1e40af; --c-data_multihop: #9f1239; --c-broadcast: #166534;
   --c-beacon: #86198f; --c-beacon_req: #6b21a8; --c-join: #111827; --c-nwk_cmd: #334155; --c-mac_cmd: #334155;
+  --c-no_data: #374151; --c-inter_pan: #111827; --c-green_power: #3f6212;
   --c-other: #4b5563; --c-foreign: #4b5563;
   --n-coord: #1e40af; --n-router: #0f766e; --n-zed: #6d28d9; --n-focus: #b45309; --n-unknown: #4b5563;
   --chipmix: 10%;
