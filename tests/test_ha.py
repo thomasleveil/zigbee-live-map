@@ -12,7 +12,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from zigbee_live_map import decode, ha
+from zigbee_live_map import builders, ha
 from zigbee_live_map.access import SUPERVISOR_ENV
 from zigbee_live_map.devices import DeviceStore
 from zigbee_live_map.ha import HaNames, device_names
@@ -186,9 +186,9 @@ def test_ha_match_a_sniffed_device_shows_its_home_assistant_name(tmp_path):
     async def main():
         service = HaNames(None)
         hub = hub_with(service, tmp_path)
-        frame = decode.build_secured_nwk(NET, seq=5, pan=0x1A62, mac_dst=0x0000, mac_src=0x72F6,
+        frame = builders.build_secured_nwk(NET, seq=5, pan=0x1A62, mac_dst=0x0000, mac_src=0x72F6,
                                          nwk_dst=0x0000, nwk_src=0x72F6, radius=30, nwk_seq=5,
-                                         src64=DEV64, counter=42, payload=decode.zcl_basic_response("LUMI", "lumi.weather", power=3))
+                                         src64=DEV64, counter=42, payload=builders.zcl_basic_response("LUMI", "lumi.weather", power=3))
         await hub.publish(frame, 1.0, None)
         heard_ieee = hub.events[-1]["ieee"]              # the exact string the Classifier produced from the air
         # The HA registry carries the same address, written in Home Assistant's own casing.

@@ -52,9 +52,10 @@ from urllib.parse import urlsplit
 
 from aiohttp import WSCloseCode, WSMsgType, web
 
-from . import __version__, access as accessmod, crypto, decode, demo, keys as keystore
+from . import __version__, access as accessmod, crypto, decode, demo, keys as keystore, wire
 from .access import INGRESS, LAN, LOCAL, Access, LoginGuard, Sessions
 from .devices import DeviceError, DeviceStore
+from .dissect import dissect
 from .frames import Classifier, read_pcap
 from .ha import HaNames
 from .hue import HueService
@@ -218,10 +219,11 @@ class Hub:
             except (ConnectionError, RuntimeError):
                 self.clients.discard(ws)
 
-    async def publish(self, frame: bytes, ts: float, rssi: int | None) -> None:
+    async def publish(self, raw: bytes, ts: float, rssi: int | None) -> None:
+        frame = wire.read(raw)   # the clear headers, read once for everything below
         event = self.classifier.event(frame, ts, rssi)
         self.events.append(event)
-        self.frames[event["n"]] = frame
+        self.frames[event["n"]] = frame.raw
         self._frame_order.append(event["n"])
         while len(self._frame_order) > self._frame_cap:
             self.frames.pop(self._frame_order.popleft(), None)
@@ -240,7 +242,7 @@ class Hub:
         await self._inspect(frame, event)
         await self.send_all({"type": "ev", "e": event})
 
-    async def _check_security(self, frame: bytes) -> None:
+    async def _check_security(self, frame: wire.Frame) -> None:
         """Try every way one frame reveals the network key or a join vulnerability: the APS default-link-key
         test, and the Touchlink (ZLL) key transport recovered with the leaked ZLL master key."""
         if not self.vulnerable:
@@ -271,7 +273,7 @@ class Hub:
         while len(self._zll_response_ids) > 128:
             self._zll_response_ids.pop(next(iter(self._zll_response_ids)))
 
-    def _recover_touchlink(self, frame: bytes) -> bytes | None:
+    def _recover_touchlink(self, frame: wire.Frame) -> bytes | None:
         """Recover the network key a Touchlink join transports, if its scan response was seen first."""
         kt = decode.touchlink_key_transport(frame)
         if kt is None:
@@ -281,7 +283,7 @@ class Hub:
             return None
         return crypto.zll_decrypt_network_key(kt["key_index"], kt["transaction_id"], response_id, kt["encrypted_key"])
 
-    async def _inspect(self, frame: bytes, event: dict) -> None:
+    async def _inspect(self, frame: wire.Frame, event: dict) -> None:
         """Read what the encrypted layers give up: the vulnerability test, device identity, link costs."""
         await self._check_security(frame)
         key = self.network_key
@@ -902,7 +904,7 @@ async def api_frame(request: web.Request) -> web.Response:
     if frame is None:
         raise web.HTTPNotFound(text=json.dumps({"error": "this frame is no longer kept"}), content_type="application/json")
     return web.json_response({"n": n, "hex": frame.hex(" "), "decrypted": hub.network_key is not None,
-                              "layers": decode.dissect(frame, hub.network_key)})
+                              "layers": dissect(frame, hub.network_key)})
 
 
 async def api_vendors(request: web.Request) -> web.Response:

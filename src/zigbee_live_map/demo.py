@@ -10,8 +10,7 @@ from __future__ import annotations
 import asyncio
 import random
 
-from . import crypto, decode
-from . import frames as zf
+from . import builders, crypto
 
 PAN = "0x1a62"
 PAN_ID = int(PAN, 16)
@@ -89,11 +88,11 @@ class DemoNetwork:
                 await self.emit(frame, self.rssi[src] + random.randint(-3, 3))
             if acked_by:
                 await asyncio.sleep(0.004)
-                await self.emit(zf.build_ack(seq), self.rssi[acked_by] + random.randint(-3, 3))
+                await self.emit(builders.build_ack(seq), self.rssi[acked_by] + random.randint(-3, 3))
 
     async def hop(self, src: str, dst: str, *, command: bool, nsrc: str, ndst: str, radius: int, nseq: int, size: int = 12) -> None:
         seq = self._next(self.mac_seq, src)
-        frame = zf.build_nwk(seq, PAN, dst, src, command=command, nwk_dst=ndst, nwk_src=nsrc, radius=radius,
+        frame = builders.build_nwk(seq, PAN, dst, src, command=command, nwk_dst=ndst, nwk_src=nsrc, radius=radius,
                              nwk_seq=nseq, hop_ieee=ieee_of(src), payload_len=size)
         await self._send(src, frame, seq, None if dst == "0xffff" else dst)
 
@@ -152,7 +151,7 @@ class DemoNetwork:
         await self.sleep(random.random() * 15)
         while True:
             rows = [(int(n, 16), self.cost_between(addr, n), self.cost_between(addr, n)) for n in self.neighbours_of(addr)]
-            frame = decode.build_link_status(DEMO_NET_KEY, pan=PAN_ID, src=int(addr, 16), src64=eui_of(addr),
+            frame = builders.build_link_status(DEMO_NET_KEY, pan=PAN_ID, src=int(addr, 16), src64=eui_of(addr),
                                              counter=self._next(self.sec_ctr, addr), neighbours=rows, seq=self._next(self.mac_seq, addr))
             await self.secured(addr, frame)
             await self.sleep(15)
@@ -160,8 +159,8 @@ class DemoNetwork:
     async def announce(self, addr: str, model: str, router: bool) -> None:
         """A device telling, in a decryptable ZCL Basic response, what it is (maker, model, power)."""
         parent = self.parent.get(addr, COORDINATOR)
-        payload = decode.zcl_basic_response("DemoCorp", model, power=1 if router else 3, sw="1.4.0-demo")
-        frame = decode.build_secured_nwk(DEMO_NET_KEY, seq=self._next(self.mac_seq, addr), pan=PAN_ID,
+        payload = builders.zcl_basic_response("DemoCorp", model, power=1 if router else 3, sw="1.4.0-demo")
+        frame = builders.build_secured_nwk(DEMO_NET_KEY, seq=self._next(self.mac_seq, addr), pan=PAN_ID,
                                          mac_dst=int(parent, 16), mac_src=int(addr, 16), nwk_dst=int(COORDINATOR, 16),
                                          nwk_src=int(addr, 16), radius=30, nwk_seq=self._next(self.nwk_seq, addr),
                                          src64=eui_of(addr), counter=self._next(self.sec_ctr, addr), payload=payload)
@@ -169,11 +168,11 @@ class DemoNetwork:
 
     async def battery_report(self, addr: str, percent: int) -> None:
         """A battery device's ZCL Report on the Power Configuration cluster (percentage remaining)."""
-        frame = decode.build_secured_nwk(DEMO_NET_KEY, seq=self._next(self.mac_seq, addr), pan=PAN_ID,
+        frame = builders.build_secured_nwk(DEMO_NET_KEY, seq=self._next(self.mac_seq, addr), pan=PAN_ID,
                                          mac_dst=int(self.parent.get(addr, COORDINATOR), 16), mac_src=int(addr, 16),
                                          nwk_dst=int(COORDINATOR, 16), nwk_src=int(addr, 16), radius=30,
                                          nwk_seq=self._next(self.nwk_seq, addr), src64=eui_of(addr),
-                                         counter=self._next(self.sec_ctr, addr), payload=decode.power_config_report(percent))
+                                         counter=self._next(self.sec_ctr, addr), payload=builders.power_config_report(percent))
         await self.secured(addr, frame)
 
     async def identities(self) -> None:
@@ -195,7 +194,7 @@ class DemoNetwork:
         while True:
             device = targets[self.join_i % len(targets)]
             self.join_i += 1
-            frame = decode.build_transport_key(crypto.DEFAULT_TC_LINK_KEY, seq=self._next(self.mac_seq, COORDINATOR),
+            frame = builders.build_transport_key(crypto.DEFAULT_TC_LINK_KEY, seq=self._next(self.mac_seq, COORDINATOR),
                                                pan=PAN_ID, mac_dst=int(self.parent[device], 16), mac_src=int(COORDINATOR, 16),
                                                coord64=eui_of(COORDINATOR), counter=self._next(self.sec_ctr, COORDINATOR),
                                                network_key=DEMO_NET_KEY)
@@ -209,7 +208,7 @@ class DemoNetwork:
         await self.sleep(random.random() * period)
         while True:
             seq = self._next(self.mac_seq, addr)
-            await self._send(addr, zf.build_poll(seq, PAN, self.parent[addr], addr), seq, self.parent[addr])
+            await self._send(addr, builders.build_poll(seq, PAN, self.parent[addr], addr), seq, self.parent[addr])
             if self.pending[addr]:
                 parent, nseq, radius = self.pending[addr].pop(0)
                 await self.sleep(0.01)
@@ -241,12 +240,12 @@ class DemoNetwork:
         await self.sleep(12)
         while True:
             async with self.air:
-                await self.emit(zf.build_beacon_request(random.randrange(256)), -70)
+                await self.emit(builders.build_beacon_request(random.randrange(256)), -70)
             for addr in [COORDINATOR, *ROUTERS]:
                 await self.sleep(0.02 + random.random() * 0.03)
                 seq = self._next(self.mac_seq, addr)
                 open_to_children = addr not in NO_CHILDREN
-                beacon = zf.build_beacon(seq, PAN, addr, EPID, zr=open_to_children, zed=open_to_children, permit=False,
+                beacon = builders.build_beacon(seq, PAN, addr, EPID, zr=open_to_children, zed=open_to_children, permit=False,
                                          depth=len(self.path_up(addr)) - 1)
                 await self._send(addr, beacon, seq, None)
             await self.sleep(70)

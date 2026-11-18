@@ -301,8 +301,10 @@ Language, theme and animations are set from *Settings* in the page and remembere
 
 ```
 CC2531 sniffer ──USB──▶ sniffer.py ──frames──▶ frames.py ──events──▶ server.py ──WebSocket──▶ page
-  (receive only)        (libusb)             (header decoding)       (--host)             (canvas)
+  (receive only)        (libusb)             (one event per frame)   (--host)             (canvas)
 ```
+
+A frame's clear headers are read once, in `wire.py`, and everything else reads that: `frames.py` makes the map's event from them, `decode.py` decrypts what follows when a key is known and reads the layers behind it, `dissect.py` lays a frame out layer by layer for the log's detail view. `builders.py` writes frames, for the demo and the tests.
 
 Two layers of a Zigbee frame are readable by anyone in radio range, and they are all the tool uses without a network key (see [Scope and privacy](#scope-and-privacy) for what a key adds):
 

@@ -2,7 +2,7 @@ import asyncio
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from zigbee_live_map import crypto, decode, server
+from zigbee_live_map import builders, crypto, decode, server
 from zigbee_live_map.devices import DeviceStore
 from zigbee_live_map.server import Hub, build_app
 from zigbee_live_map.vendors import Registry
@@ -136,7 +136,7 @@ def test_network_keys_are_saved_listed_guarded_and_deleted(tmp_path):
 def test_a_saved_key_auto_applies_when_its_network_is_heard(tmp_path):
     async def scenario(client, hub, origin):
         hub.keys.set("0x1a62", NET.hex(), "Home")
-        frame = decode.build_link_status(NET, pan=0x1A62, src=0x6CA5, src64=DEV64, counter=1, neighbours=[(0x0000, 1, 1)])
+        frame = builders.build_link_status(NET, pan=0x1A62, src=0x6CA5, src64=DEV64, counter=1, neighbours=[(0x0000, 1, 1)])
         await hub.publish(frame, 1.0, None)
         assert hub.pan == "0x1a62"
         assert hub.network_key == NET and hub.key_source == "saved"
@@ -147,7 +147,7 @@ def test_a_saved_key_auto_applies_when_its_network_is_heard(tmp_path):
 
 def test_a_default_key_join_is_flagged_and_the_key_is_recovered(tmp_path):
     async def scenario(client, hub, origin):
-        frame = decode.build_transport_key(crypto.DEFAULT_TC_LINK_KEY, seq=1, pan=0x1A62, mac_dst=0xCD4A,
+        frame = builders.build_transport_key(crypto.DEFAULT_TC_LINK_KEY, seq=1, pan=0x1A62, mac_dst=0xCD4A,
                                            mac_src=0x0000, coord64=COORD64, counter=0, network_key=NET)
         await hub.publish(frame, 1.0, None)
         assert hub.vulnerable is True
@@ -160,9 +160,9 @@ def test_a_default_key_join_is_flagged_and_the_key_is_recovered(tmp_path):
 def test_a_touchlink_join_recovers_the_network_key_after_its_scan_response(tmp_path):
     async def scenario(client, hub, origin):
         tid, rid = 0x12345678, 0x9ABCDEF0
-        scan = decode.build_touchlink_scan_response(seq=1, pan=0x1A62, mac_dst=0x0000, mac_src=0x3344,
+        scan = builders.build_touchlink_scan_response(seq=1, pan=0x1A62, mac_dst=0x0000, mac_src=0x3344,
                                                     transaction_id=tid, response_id=rid)
-        join = decode.build_touchlink_network_join(crypto.ZLL_KEY_INDEX_MASTER, seq=2, pan=0x1A62,
+        join = builders.build_touchlink_network_join(crypto.ZLL_KEY_INDEX_MASTER, seq=2, pan=0x1A62,
                                                    mac_dst=0x3344, mac_src=0x0000, transaction_id=tid,
                                                    response_id=rid, network_key=NET)
         await hub.publish(scan, 1.0, None)
@@ -177,7 +177,7 @@ def test_a_touchlink_join_recovers_the_network_key_after_its_scan_response(tmp_p
 
 def test_a_touchlink_join_without_its_scan_response_recovers_nothing(tmp_path):
     async def scenario(client, hub, origin):
-        join = decode.build_touchlink_network_join(crypto.ZLL_KEY_INDEX_MASTER, seq=2, pan=0x1A62,
+        join = builders.build_touchlink_network_join(crypto.ZLL_KEY_INDEX_MASTER, seq=2, pan=0x1A62,
                                                    mac_dst=0x3344, mac_src=0x0000, transaction_id=0x1111,
                                                    response_id=0x2222, network_key=NET)
         await hub.publish(join, 1.0, None)
@@ -189,7 +189,7 @@ def test_a_touchlink_join_without_its_scan_response_recovers_nothing(tmp_path):
 def test_a_non_default_join_is_seen_but_not_flagged(tmp_path):
     async def scenario(client, hub, origin):
         unique = bytes.fromhex("0102030405060708090a0b0c0d0e0f10")
-        frame = decode.build_transport_key(unique, seq=1, pan=0x1A62, mac_dst=0xCD4A, mac_src=0x0000,
+        frame = builders.build_transport_key(unique, seq=1, pan=0x1A62, mac_dst=0xCD4A, mac_src=0x0000,
                                            coord64=COORD64, counter=0, network_key=NET)
         await hub.publish(frame, 1.0, None)
         assert hub.vulnerable is False and hub.secure_join_seen is True and hub.network_key is None
@@ -200,20 +200,20 @@ def test_a_non_default_join_is_seen_but_not_flagged(tmp_path):
 def test_identity_and_link_costs_are_read_once_a_key_is_known(tmp_path):
     async def scenario(client, hub, origin):
         hub.network_key = NET
-        basic = decode.zcl_basic_response("LUMI", "lumi.weather", power=3)
-        frame = decode.build_secured_nwk(NET, seq=5, pan=0x1A62, mac_dst=0x0000, mac_src=0x72F6,
+        basic = builders.zcl_basic_response("LUMI", "lumi.weather", power=3)
+        frame = builders.build_secured_nwk(NET, seq=5, pan=0x1A62, mac_dst=0x0000, mac_src=0x72F6,
                                          nwk_dst=0x0000, nwk_src=0x72F6, radius=30, nwk_seq=5,
                                          src64=DEV64, counter=42, payload=basic)
         await hub.publish(frame, 1.0, None)
         assert hub.identities["0x72f6"] == {"manufacturer": "LUMI", "model": "lumi.weather", "power": "battery"}
-        status = decode.build_link_status(NET, pan=0x1A62, src=0x6CA5, src64=DEV64, counter=9,
+        status = builders.build_link_status(NET, pan=0x1A62, src=0x6CA5, src64=DEV64, counter=9,
                                           neighbours=[(0x0000, 1, 1), (0x29E5, 3, 5)])
         await hub.publish(status, 2.0, None)
         assert hub.link_quality["0x6ca5"] == [{"addr": "0x0000", "incoming": 1, "outgoing": 1},
                                               {"addr": "0x29e5", "incoming": 3, "outgoing": 5}]
-        batt = decode.build_secured_nwk(NET, seq=6, pan=0x1A62, mac_dst=0x0000, mac_src=0x72F6,
+        batt = builders.build_secured_nwk(NET, seq=6, pan=0x1A62, mac_dst=0x0000, mac_src=0x72F6,
                                         nwk_dst=0x0000, nwk_src=0x72F6, radius=30, nwk_seq=6,
-                                        src64=DEV64, counter=43, payload=decode.power_config_report(60))
+                                        src64=DEV64, counter=43, payload=builders.power_config_report(60))
         await hub.publish(batt, 3.0, None)
         assert hub.batteries["0x72f6"] == {"percent": 60}
 
@@ -229,8 +229,8 @@ def _hear(hub, ieee, short, identity=None):
 def test_fill_adds_every_identified_heard_device_with_its_model(tmp_path):
     async def scenario(client, hub, origin):
         hub.network_key = NET
-        basic = decode.zcl_basic_response("LUMI", "lumi.weather", power=3)
-        frame = decode.build_secured_nwk(NET, seq=5, pan=0x1A62, mac_dst=0x0000, mac_src=0x72F6,
+        basic = builders.zcl_basic_response("LUMI", "lumi.weather", power=3)
+        frame = builders.build_secured_nwk(NET, seq=5, pan=0x1A62, mac_dst=0x0000, mac_src=0x72F6,
                                          nwk_dst=0x0000, nwk_src=0x72F6, radius=30, nwk_seq=5,
                                          src64=DEV64, counter=42, payload=basic)
         await hub.publish(frame, 1.0, None)   # read from the air, not planted
@@ -360,7 +360,7 @@ def test_page_build_follows_the_page_files(monkeypatch, tmp_path):
 def test_the_network_key_names_network_commands_and_corrects_the_shape_guess(tmp_path):
     async def scenario(client, hub, origin):
         def command(payload, counter):
-            return decode.build_secured_nwk(NET, seq=counter, pan=0x1A62, mac_dst=0x0000, mac_src=0x6164,
+            return builders.build_secured_nwk(NET, seq=counter, pan=0x1A62, mac_dst=0x0000, mac_src=0x6164,
                                             nwk_dst=0x0000, nwk_src=0x6164, radius=30, nwk_seq=counter,
                                             src64=DEV64, counter=counter, payload=payload, command=True)
         status = command(bytes.fromhex("030c72cb"), 1)   # sent to the coordinator: shaped like a route record
@@ -378,7 +378,7 @@ def test_the_network_key_names_network_commands_and_corrects_the_shape_guess(tmp
 
 def test_neighbour_tables_and_end_to_end_acknowledgements_are_read_with_the_key(tmp_path):
     def secured(payload, src, dst, counter):
-        return decode.build_secured_nwk(NET, seq=counter, pan=0x1A62, mac_dst=dst, mac_src=src, nwk_dst=dst, nwk_src=src,
+        return builders.build_secured_nwk(NET, seq=counter, pan=0x1A62, mac_dst=dst, mac_src=src, nwk_dst=dst, nwk_src=src,
                                         radius=30, nwk_seq=counter, src64=DEV64, counter=counter, payload=payload)
 
     def entry(addr, flags, lqi):
@@ -404,7 +404,7 @@ def test_neighbour_tables_and_end_to_end_acknowledgements_are_read_with_the_key(
 
 def test_zcl_requests_and_answers_are_marked_for_pairing(tmp_path):
     def secured(payload, src, dst, counter):
-        return decode.build_secured_nwk(NET, seq=counter, pan=0x1A62, mac_dst=dst, mac_src=src, nwk_dst=dst, nwk_src=src,
+        return builders.build_secured_nwk(NET, seq=counter, pan=0x1A62, mac_dst=dst, mac_src=src, nwk_dst=dst, nwk_src=src,
                                         radius=30, nwk_seq=counter, src64=DEV64, counter=counter, payload=payload)
     head = lambda: (0x0201).to_bytes(2, "little") + (0x0104).to_bytes(2, "little") + bytes([0x01])
 
@@ -421,7 +421,7 @@ def test_zcl_requests_and_answers_are_marked_for_pairing(tmp_path):
 
 def test_a_logged_frame_can_be_opened_layer_by_layer(tmp_path):
     async def scenario(client, hub, origin):
-        frame = decode.build_link_status(NET, pan=0x1A62, src=0x6CA5, src64=DEV64, counter=9, neighbours=[(0x0000, 1, 1)])
+        frame = builders.build_link_status(NET, pan=0x1A62, src=0x6CA5, src64=DEV64, counter=9, neighbours=[(0x0000, 1, 1)])
         await hub.publish(frame, 1.0, None)
         n = hub.events[-1]["n"]
         resp = await client.get(f"/api/frames/{n}", headers=origin)
