@@ -9,14 +9,17 @@ the AES-MMO keyed hash of the ZigBee spec), used on traffic the user is entitled
   key), NWK payloads decrypt, which turns the encrypted part into device identity and the routers'
   own link-quality figures.
 
-AES-128 is the only primitive taken from a library; CCM* and the keyed hash are built on top so the
-behaviour is explicit and testable. The one Zigbee quirk is that frames are transmitted with a
-security level of 0 but secured as level 5 (ENC-MIC-32); decryption restores level 5.
+AES-128 and AES-CCM come from the `cryptography` library; the AES-MMO keyed hash and the Touchlink key
+derivation, which no library offers under a licence this tool can ship, are built on the AES block here.
+The one Zigbee quirk is that frames are transmitted with a security level of 0 but secured as level 5
+(ENC-MIC-32); decryption restores level 5.
 """
 
 from __future__ import annotations
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.ciphers.aead import AESCCM
 
 DEFAULT_TC_LINK_KEY = bytes.fromhex("5a6967426565416c6c69616e63653039")  # "ZigBeeAlliance09"
 ZLL_MASTER_KEY = bytes.fromhex("9f5595f10257c8a469cbf42bc93fee31")       # leaked Touchlink (ZLL) master key
@@ -127,53 +130,27 @@ def zll_decrypt_network_key(key_index: int, transaction_id: int, response_id: in
     return aes_ecb_decrypt(transport_key, encrypted_key)
 
 
-# --- CCM* (IEEE 802.15.4 / ZigBee): decrypt-and-verify -------------------------------------
-
-def _ctr_blocks(key: bytes, nonce: bytes, count: int):
-    for i in range(count):
-        yield aes_ecb(key, b"\x01" + nonce + i.to_bytes(2, "big"))
-
-
-def ccm_star_decrypt(key: bytes, nonce: bytes, ciphertext: bytes, aad: bytes, mic_len: int = MIC_LEN) -> bytes | None:
-    """Return the plaintext if the MIC checks out, else None. nonce is 13 bytes."""
-    if len(nonce) != 13 or len(ciphertext) < mic_len:
-        return None
-    body, mic = ciphertext[:-mic_len], ciphertext[-mic_len:]
-    keystream = list(_ctr_blocks(key, nonce, (len(body) + 15) // 16 + 1))
-    plaintext = _xor(body, b"".join(keystream[1:])[:len(body)])
-
-    flags = (0x40 if aad else 0) | (((mic_len - 2) // 2) << 3) | 1
-    mac = aes_ecb(key, bytes([flags]) + nonce + len(plaintext).to_bytes(2, "big"))
-    if aad:
-        block = len(aad).to_bytes(2, "big") + aad
-        block += b"\x00" * (-len(block) % 16)
-        for i in range(0, len(block), 16):
-            mac = aes_ecb(key, _xor(mac, block[i:i + 16]))
-    pt = plaintext + b"\x00" * (-len(plaintext) % 16)
-    for i in range(0, len(pt), 16):
-        mac = aes_ecb(key, _xor(mac, pt[i:i + 16]))
-    if _xor(mac[:mic_len], keystream[0][:mic_len]) != mic:
-        return None
-    return plaintext
-
+# --- CCM* (IEEE 802.15.4 / ZigBee) -----------------------------------------------------------
+#
+# CCM* differs from plain CCM (RFC 3610) only at the security levels Zigbee does not use for these frames:
+# encryption without a MIC, and a MIC without encryption. At level 5 (ENC-MIC-32) the two are the same
+# algorithm, so the library's AES-CCM does the work: a 13-byte nonce (hence a 2-byte length field) and a
+# 4-byte tag.
 
 def nonce(source_eui64: int, frame_counter: int, security_control: int) -> bytes:
     return source_eui64.to_bytes(8, "little") + frame_counter.to_bytes(4, "little") + bytes([security_control])
 
 
+def ccm_star_decrypt(key: bytes, nonce: bytes, ciphertext: bytes, aad: bytes, mic_len: int = MIC_LEN) -> bytes | None:
+    """Return the plaintext if the MIC checks out, else None. nonce is 13 bytes; ciphertext ends with the MIC."""
+    if len(nonce) != 13 or len(ciphertext) < mic_len:
+        return None
+    try:
+        return AESCCM(key, tag_length=mic_len).decrypt(nonce, ciphertext, aad or None)
+    except InvalidTag:
+        return None
+
+
 def ccm_star_encrypt(key: bytes, nonce: bytes, plaintext: bytes, aad: bytes, mic_len: int = MIC_LEN) -> bytes:
     """Encrypt-and-authenticate, the inverse of ccm_star_decrypt. Used by the demo and the tests."""
-    flags = (0x40 if aad else 0) | (((mic_len - 2) // 2) << 3) | 1
-    mac = aes_ecb(key, bytes([flags]) + nonce + len(plaintext).to_bytes(2, "big"))
-    if aad:
-        block = len(aad).to_bytes(2, "big") + aad
-        block += b"\x00" * (-len(block) % 16)
-        for i in range(0, len(block), 16):
-            mac = aes_ecb(key, _xor(mac, block[i:i + 16]))
-    pt = plaintext + b"\x00" * (-len(plaintext) % 16)
-    for i in range(0, len(pt), 16):
-        mac = aes_ecb(key, _xor(mac, pt[i:i + 16]))
-    keystream = list(_ctr_blocks(key, nonce, (len(plaintext) + 15) // 16 + 1))
-    body = _xor(plaintext, b"".join(keystream[1:])[:len(plaintext)])
-    mic = _xor(mac[:mic_len], keystream[0][:mic_len])
-    return body + mic
+    return AESCCM(key, tag_length=mic_len).encrypt(nonce, plaintext, aad or None)

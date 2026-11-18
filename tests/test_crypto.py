@@ -69,3 +69,15 @@ def test_transport_key_key_is_the_hash_of_the_link_key():
     # Derived key for key-transport (input 0x00) differs from the link key itself.
     tkk = crypto.transport_key_key(crypto.DEFAULT_TC_LINK_KEY)
     assert len(tkk) == 16 and tkk != crypto.DEFAULT_TC_LINK_KEY
+
+
+def test_ccm_star_matches_the_block_by_block_construction():
+    # Pinned from the CBC-MAC + CTR construction this module carried before it handed CCM* to the library's
+    # AES-CCM: at level 5 (ENC-MIC-32) the two must agree byte for byte, with and without additional data.
+    key = bytes.fromhex("c0c1c2c3c4c5c6c7c8c9cacbcccdcecf")
+    nonce = bytes.fromhex("a0a1a2a3a4a5a6a70302010005")
+    aad, plain = bytes.fromhex("0001020304050607"), bytes(range(8, 31))
+    assert crypto.ccm_star_encrypt(key, nonce, plain, aad).hex() == "8abd8629a10a3075c74077dbf62c6389c4e45103178374e1da3f04"
+    assert crypto.ccm_star_encrypt(key, nonce, plain, b"").hex() == "8abd8629a10a3075c74077dbf62c6389c4e45103178374103f418e"
+    assert crypto.ccm_star_decrypt(key, nonce, bytes.fromhex("8abd8629a10a3075c74077dbf62c6389c4e45103178374e1da3f04"), aad) == plain
+    assert crypto.ccm_star_decrypt(key, nonce[:-1], plain, aad) is None   # a nonce that is not 13 bytes
